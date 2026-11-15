@@ -4,7 +4,7 @@
 
 A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to bring up to a maximum of 20 stratagems. It reuses the existing stratagem widget on the loadout screen for seamless selection.
 
-**This was made for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+**Built and tested on HellForge 0.4.0-beta, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
 
 ## Installation
 
@@ -42,3 +42,17 @@ The game's stratagem list holds 16 at most, including its own (Reinforce, Resupp
 <img src="images/loadout-full.png" width="310">
 
 <img src="images/stratagem-list.png" width="300">
+
+## Building
+
+HellForge builds the mod from its source when the game starts, so you don't need to build anything to play. To make the release zip yourself, run `package.bat` (or `package.sh`) with your HellForge folder:
+
+```
+.\package.bat C:\HellForge
+```
+
+The zip is written to `dist`.
+
+## License
+
+[MIT](LICENSE)
