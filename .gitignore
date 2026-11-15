@@ -1,0 +1,15 @@
+# game binaries and IDA databases
+research/bin/
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# working notes and the throwaway test mod
+HANDOFF.md
+test-mod/
+
+# release zips
+dist/
