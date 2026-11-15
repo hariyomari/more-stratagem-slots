@@ -4,6 +4,17 @@
 
 A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to bring up to a maximum of 20 stratagems. It reuses the existing stratagem widget on the loadout screen for seamless selection.
 
+**This was made for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+
+## Installation
+
+1. Download the latest release from the [Releases](https://github.com/hariyomari/more-stratagem-slots/releases/latest) page.
+2. Open the HellForge launcher, go to the Mods page and press Add mods...
+3. Pick the zip. You don't need to unpack it.
+4. Make sure the mod is switched on, then start the game.
+
+You can also drop the zip directly into your HellForge `mods` folder.
+
 ## Usage
 
 By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pages. If you have multiple pages, you should see `the current page number/the max page number` in the top right of the stratagem list.
