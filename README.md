@@ -48,8 +48,8 @@ The game's stratagem list holds 16 at most, including its own (Reinforce, Resupp
 
 HellForge builds the mod from its source when the game starts, so you don't need to build anything to play. To make the release zip yourself, run `scripts\package.bat` (or `scripts/package.sh`) with your HellForge folder:
 
-```
-.\scripts\package.bat C:\HellForge
+```powershell
+.\scripts\package.bat $env:USERPROFILE\Documents\HellForge        # default HellForge install location
 ```
 
 The zip is written to `dist`.
