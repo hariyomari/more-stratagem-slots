@@ -25,14 +25,15 @@ The controls can be configured in the settings, which get auto-generated on the 
 
 The settings are in `more-stratagem-slots.ini`, in your HellForge `mods` folder. It is created with the defaults the first time you start the game with the mod. Changes apply the next time the game starts.
 
-| Setting      | Default | Description                                                                                                                                                                           |
-| ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slots`      | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                           |
-| `per_row`    | `4`     | The number of slots per row on the loadout screen, from 4 to 20.                                                                                                                      |
-| `page_prev`  | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                    |
-| `page_next`  | `E`     | The key for the next page.                                                                                                                                                            |
-| `page_wheel` | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open.                                                                                                              |
-| `page_hold`  | `on`    | Stops you from switching pages while a stratagem is being activated. With `off` you can switch right away, but the stratagem being activated will show the wrong name until it lands. |
+| Setting      | Default | Description                                                                                                                                                                                       |
+| ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slots`      | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                       |
+| `per_row`    | `4`     | The number of slots per row on the loadout screen, from 4 to 20.                                                                                                                                  |
+| `page_prev`  | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                |
+| `page_next`  | `E`     | The key for the next page.                                                                                                                                                                        |
+| `page_wheel` | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open.                                                                                                                          |
+| `page_hold`  | `on`    | Stops you from switching pages while a stratagem is being activated. With `off` you can switch right away, but the stratagem being activated will show the wrong name until it lands.             |
+| `page_added` | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours. |
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
@@ -45,10 +46,10 @@ The game's stratagem list holds 16 at most, including its own (Reinforce, Resupp
 
 ## Building
 
-HellForge builds the mod from its source when the game starts, so you don't need to build anything to play. To make the release zip yourself, run `package.bat` (or `package.sh`) with your HellForge folder:
+HellForge builds the mod from its source when the game starts, so you don't need to build anything to play. To make the release zip yourself, run `scripts\package.bat` (or `scripts/package.sh`) with your HellForge folder:
 
 ```
-.\package.bat C:\HellForge
+.\scripts\package.bat C:\HellForge
 ```
 
 The zip is written to `dist`.
