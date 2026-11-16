@@ -391,6 +391,7 @@ static int g_activating_local;    /* inside the game's activation of a local pla
 static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
 static int g_page_hold = 1;       /* page_hold: no page change while a stratagem of the page is called in or in hand */
+static int g_page_added = 1;      /* page_added: loadout stratagems other mods add to the list go in the pages too */
 static volatile LONG64 g_list_seen; /* GetTickCount64 when the list's update last saw it open */
 
 /* PickerInput's call in progress (its screen), and whether it set a slot (a pick, not the back button) */
@@ -410,7 +411,7 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PROFILE, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE,
        LOG_ROWS, LOG_WHEEL, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 80, 24, 6, 40, 200, 12 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 200, 24, 6, 40, 200, 12 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -1015,16 +1016,25 @@ static void TypeList(const uint8_t* record, uint32_t first, uint32_t last, char*
  * then k+1..2k, ...; k = 16 - the game's entries at ready-up). A pick's uses and cooldown live in its own entry, so a
  * pick out of the list keeps them here (its cooldown is an end time: it runs on). The page changes with the keys while
  * the list is open, or by itself when a stratagem in hand is on another page. */
+#define MAX_ITEMS (MAX_SLOTS + GAME_LIST_MAX)
 typedef struct
 {
-    int active;                   /* a loadout of more than 16 went to the mission */
-    uint32_t picks, per_page, pages, page;
-    uint8_t fresh[MAX_SLOTS][LOADOUT_SLOT]; /* each pick's entry at ready-up */
-    uint8_t state[MAX_SLOTS][LOADOUT_SLOT]; /* its entry now (for the picks on the page: as of the last page change) */
-    uint8_t gone[MAX_SLOTS];      /* left the list during the mission (used up): not put back */
+    int active;                   /* a loadout's picks went to the mission and were found again in its record */
+    int paged;                    /* its list has been in pages (more than one page, or an entry taken in) */
+    uint32_t picks;               /* the loadout's picks: items 0..picks-1 */
+    uint32_t items;               /* the picks, then the entries taken in during the mission (page_added) */
+    uint32_t per_page, pages, page;
+    uint32_t in_record;           /* the picks the record went to the mission with (page 1 at ready-up) */
+    int checked;                  /* those picks were seen in the local player's list (the record was this player's) */
+    uint32_t fixed_types[GAME_LIST_MAX], fixed; /* the game's entries at ready-up: on every page */
+    uint8_t fresh[MAX_ITEMS][LOADOUT_SLOT]; /* each item's entry at ready-up (or when it was taken in) */
+    uint8_t state[MAX_ITEMS][LOADOUT_SLOT]; /* its entry now (for the items in the list: as of the last page change) */
+    uint8_t gone[MAX_ITEMS];      /* left the list during the mission (used up): not put back */
+    uint8_t shown[MAX_ITEMS];     /* put in the list by the last page change (or at ready-up) */
 } Pager;
 static Pager g_pager;
 static int g_list_is_open;
+static int g_refitting;           /* the page change under way is the update's own (room in the list), not the player's */
 
 static uint32_t EntryType(const uint8_t* list, uint32_t i) { return Get32(list + LOADOUT_SLOTS + i * LOADOUT_SLOT); }
 
@@ -1054,7 +1064,86 @@ static uint32_t PageFirst(uint32_t page) { return page * g_pager.per_page; }
 static uint32_t PageEnd(uint32_t page)
 {
     uint32_t end = (page + 1) * g_pager.per_page;
-    return end < g_pager.picks ? end : g_pager.picks;
+    return end < g_pager.items ? end : g_pager.items;
+}
+
+static const uint8_t* Info(uint32_t type); /* with the Eagles */
+
+/* A stratagem a player can put in a loadout: a stable id, and the flag the loadout's own refresh shows a type by. The
+ * mission's own (Reinforce, Resupply, Eagle Rearm, objective stratagems) are not. */
+#define INFO_STABLE 4u
+static int Selectable(uint32_t type)
+{
+    const uint8_t* info = g_eagles_ok ? Info(type) : NULL;
+    return info != NULL && Get32(info + INFO_STABLE) != 0 && (Get32(info + INFO_FLAGS) & 2) != 0;
+}
+
+/* The list against the pages. Its entries are the items in it, the game's own from ready-up, and whatever was added
+ * since (by the mission, or by another mod such as P.S.S.). With page_added, an added loadout stratagem is taken in as
+ * an item after the picks, so it is in the pages like them; anything else stays on every page. A page is as many items
+ * as fit beside the entries that stay, less LIST_SPARE rows left free for the next addition, so the pages are counted
+ * again from the list as it is now. Returns the items in the list. */
+static uint32_t FitPages(const uint8_t* list)
+{
+    uint32_t n = Get32(list + LOADOUT_COUNT);
+    if (n > GAME_LIST_MAX || g_pager.per_page == 0) return 0;
+    uint8_t taken[GAME_LIST_MAX] = { 0 };
+    uint32_t ours = 0;
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        if (!g_pager.shown[k] || g_pager.gone[k]) continue;
+        uint32_t type = Get32(g_pager.state[k]), i = 0;
+        while (i < n && (taken[i] || Get32(list + LOADOUT_SLOTS + i * LOADOUT_SLOT) != type)) i++;
+        if (i == n) continue;
+        taken[i] = 1;
+        ours++;
+    }
+    uint32_t fixed_types[GAME_LIST_MAX];
+    memcpy(fixed_types, g_pager.fixed_types, sizeof fixed_types);
+    for (uint32_t i = 0; i < n; i++)
+    {
+        if (taken[i]) continue;
+        const uint8_t* e = list + LOADOUT_SLOTS + i * LOADOUT_SLOT;
+        uint32_t type = Get32(e), j = 0, k = 0;
+        while (j < g_pager.fixed && fixed_types[j] != type) j++;
+        if (j < g_pager.fixed) { fixed_types[j] = 0xFFFFFFFFu; continue; }
+        g_pager.paged = 1; /* something was added: from here on the pages leave rows free for the next */
+        if (!g_page_added || !Selectable(type)) continue;
+        /* an item out of the list that was added again (P.S.S. after a change of players) is that item; else a new one */
+        while (k < g_pager.items && (g_pager.shown[k] || g_pager.gone[k] || Get32(g_pager.state[k]) != type)) k++;
+        if (k == g_pager.items)
+        {
+            if (g_pager.items >= MAX_ITEMS) continue;
+            g_pager.items++;
+            memcpy(g_pager.fresh[k], e, LOADOUT_SLOT);
+            g_pager.gone[k] = 0;
+            LOG_ONCE(LOG_PAGE, "pages: type %u in row %u was added to the list: item %u, in the pages after the picks", type,
+                     i + 1, k + 1);
+        }
+        memcpy(g_pager.state[k], e, LOADOUT_SLOT);
+        g_pager.shown[k] = 1;
+        taken[i] = 1;
+        ours++;
+        g_pager.paged = 1;
+    }
+    uint32_t others = n - ours, room = GAME_LIST_MAX - others;
+    /* a loadout that fits and has had nothing added keeps its one page, with whatever rows are free */
+    uint32_t spare = g_pager.paged ? LIST_SPARE : 0;
+    uint32_t per = room > spare ? room - spare : 1;
+    uint32_t pages = (g_pager.items + per - 1) / per;
+    if (pages == 0) pages = 1;
+    if (per != g_pager.per_page || pages != g_pager.pages)
+    {
+        uint32_t first = PageFirst(g_pager.page);
+        LOG_ONCE(LOG_PAGE, "pages: %u entries stay on every page, %u items: %u pages of %u now (%u of %u before)", others,
+                 g_pager.items, pages, per, g_pager.pages, g_pager.per_page);
+        g_pager.per_page = per;
+        g_pager.pages = pages;
+        g_pager.page = first / per;
+        if (g_pager.page >= pages) g_pager.page = pages - 1;
+    }
+    if (pages >= 2) g_pager.paged = 1;
+    return ours;
 }
 
 /* A list entry's fields past type (+0) and uses (+4): u64 times on the game's clock (microseconds). */
@@ -1109,8 +1198,8 @@ static int ArmedRow(const uint8_t** record)
 }
 
 /* Puts page `to` in the list in place of the current one. The current page's picks are found in the list by type (in
- * order) and kept here; the rest of the list (the game's) stays as it is, and the new page's picks go where the old
- * ones were. Unless forced, a change that would move or replace an entry being called in is held back (1: changed,
+ * order) and kept here; the rest of the list (the game's) stays as it is, and the new page's picks go after it.
+ * Unless forced, a change that would move or replace an entry being called in is held back (1: changed,
  * 0: not possible, -1: held back): the HUD shows a call-in by its row, so after a change that row would show the new
  * page's stratagem as the one coming in. */
 static int SwitchPage(uint32_t to, const char* why, int force)
@@ -1118,18 +1207,21 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     uint8_t* list = LocalList();
     if (list == NULL) LOG_ONCE(LOG_PAGE, "page change (%s): no list of the local player (id %llu)", why,
                                (unsigned long long)LocalPeer());
-    if (list == NULL || to >= g_pager.pages) return 0;
+    if (list == NULL) return 0;
     uint32_t n = Get32(list + LOADOUT_COUNT);
     if (n > GAME_LIST_MAX) return 0;
+    FitPages(list);
+    if (to >= g_pager.pages) return 0;
 
     uint8_t keep[GAME_LIST_MAX][LOADOUT_SLOT];
-    uint32_t kept = 0, insert_at = 0xFFFFFFFFu;
+    uint32_t kept = 0, insert_at;
     uint8_t taken[GAME_LIST_MAX] = { 0 };
-    int found[MAX_SLOTS]; /* the current page's picks: where each is in the list, or -1 (used up) */
-    for (uint32_t k = 0; k < MAX_SLOTS; k++) found[k] = -1;
-    for (uint32_t k = PageFirst(g_pager.page); k < PageEnd(g_pager.page); k++)
+    uint8_t placed[MAX_ITEMS] = { 0 }; /* the items this change puts in the list */
+    int found[MAX_ITEMS]; /* the items in the list now: where each is, or -1 (used up) */
+    for (uint32_t k = 0; k < MAX_ITEMS; k++) found[k] = -1;
+    for (uint32_t k = 0; k < g_pager.items; k++)
     {
-        if (g_pager.gone[k]) continue;
+        if (!g_pager.shown[k] || g_pager.gone[k]) continue;
         uint32_t type = Get32(g_pager.state[k]), i = 0;
         while (i < n && (taken[i] || EntryType(list, i) != type)) i++;
         if (i == n) continue; /* the game took it out (used up) */
@@ -1138,10 +1230,13 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     }
     for (uint32_t i = 0; i < n; i++)
     {
-        if (taken[i]) { if (insert_at == 0xFFFFFFFFu) insert_at = kept; continue; }
+        if (taken[i]) continue;
         memcpy(keep[kept++], list + LOADOUT_SLOTS + i * LOADOUT_SLOT, LOADOUT_SLOT);
     }
-    if (insert_at == 0xFFFFFFFFu) insert_at = kept;
+    /* The page goes after every entry that stays. The HUD draws granted entries (the mission's, another mod's) before
+     * the picks, in the list's order: with the page in front of the game's trailing entries (an objective's stratagem,
+     * Eagle Rearm), an added stratagem on the page came before them and they moved from page to page. */
+    insert_at = kept;
 
     uint8_t out[GAME_LIST_MAX][LOADOUT_SLOT];
     uint32_t count = 0, put = 0, room = GAME_LIST_MAX - kept; /* the game's entries always stay */
@@ -1149,12 +1244,13 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     {
         if (i == insert_at)
             for (uint32_t k = PageFirst(to); k < PageEnd(to) && put < room; k++)
-                if (!g_pager.gone[k] && (k < PageFirst(g_pager.page) || k >= PageEnd(g_pager.page) || found[k] >= 0))
+                if (!g_pager.gone[k] && (!g_pager.shown[k] || found[k] >= 0))
                 {
-                    /* a pick of the page shown comes from the list (its state here is as of the last change) */
-                    const uint8_t* from = k >= PageFirst(g_pager.page) && k < PageEnd(g_pager.page) ?
+                    /* a pick in the list comes from the list (its state here is as of the last change) */
+                    const uint8_t* from = g_pager.shown[k] ?
                         list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT : g_pager.state[k];
                     memcpy(out[count++], from, LOADOUT_SLOT);
+                    placed[k] = 1;
                     put++;
                 }
         if (i < kept && count < GAME_LIST_MAX) memcpy(out[count++], keep[i], LOADOUT_SLOT);
@@ -1167,7 +1263,8 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     static int stale_row = -1;
     const uint8_t* record = NULL;
     uint64_t now = Now();
-    if (!g_page_hold) force = 1; /* page_hold = off: the player takes the wrong name on that row */
+    /* page_hold = off: the player takes the wrong name on that row (not for a change the player did not ask for) */
+    if (!g_page_hold && !g_refitting) force = 1;
     int armed = force ? -1 : ArmedRow(&record);
     if (!force && record == NULL) stale = NULL;
     if (armed >= 0 && record == stale && armed == stale_row) armed = -1;
@@ -1186,19 +1283,23 @@ static int SwitchPage(uint32_t to, const char* why, int force)
         if ((!calling && (int)i != armed) || (i < count && Get32(out[i]) == Get32(e))) continue;
         if (calling) armed_since = 0;
         else if (armed_since == 0) armed_since = GetTickCount64();
-        LOG_ONCE(LOG_PAGE, "page change (%s) held back: type %u in row %u is %s (call-in ends in %d ms)", why, Get32(e),
-                 i + 1, calling ? "being called in" : "in hand", (int)(((int64_t)Get64(e + ENTRY_CALL_END) -
-                 (int64_t)now) / 1000));
+        /* (the refit asks again every update: not logged) */
+        if (!g_refitting)
+            LOG_ONCE(LOG_PAGE, "page change (%s) held back: type %u in row %u is %s (call-in ends in %d ms)", why,
+                     Get32(e), i + 1, calling ? "being called in" : "in hand",
+                     (int)(((int64_t)Get64(e + ENTRY_CALL_END) - (int64_t)now) / 1000));
         return -1;
     }
     armed_since = 0;
 
-    for (uint32_t k = PageFirst(g_pager.page); k < PageEnd(g_pager.page); k++)
+    /* only a pick that was in the list and is not there any more was used up; one that found no room was never in it */
+    for (uint32_t k = 0; k < g_pager.items; k++)
     {
-        if (g_pager.gone[k]) continue;
+        if (!g_pager.shown[k] || g_pager.gone[k]) continue;
         if (found[k] < 0) { g_pager.gone[k] = 1; continue; }
         memcpy(g_pager.state[k], list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT, LOADOUT_SLOT);
     }
+    memcpy(g_pager.shown, placed, sizeof g_pager.shown);
     uint8_t* slots = list + LOADOUT_SLOTS;
     memcpy(slots, out, (size_t)count * LOADOUT_SLOT);
     if (count < n) memset(slots + count * LOADOUT_SLOT, 0, (size_t)(n - count) * LOADOUT_SLOT);
@@ -1227,13 +1328,6 @@ static void Augment(uint8_t* record)
     g_augment(record);
     uint32_t after = Get32(record + LOADOUT_COUNT);
     if (after > LOADOUT_MAX) return;
-    if (after <= GAME_LIST_MAX)
-    {
-        /* every caller applies a loadout to the mission (ready-up, the game's rebuilds): one that fits ends the pages */
-        if (g_pager.active) LOG_ONCE(LOG_PAGE, "record %p: %u in all, no pages", (void*)record, after);
-        g_pager.active = 0;
-        return;
-    }
 
     int pick_of[LOADOUT_MAX]; /* the entry's pick index, or -1 for the game's */
     uint32_t matched = 0;
@@ -1243,6 +1337,30 @@ static void Augment(uint8_t* record)
         if (matched < picks && EntryType(record, i) == pick_types[matched]) pick_of[i] = (int)matched++;
     }
     uint32_t added = after - matched;
+    if (after <= GAME_LIST_MAX)
+    {
+        /* Every caller applies a loadout to the mission (ready-up, the game's rebuilds). One that fits goes as it is,
+         * in one page; the pages start during the mission if other mods add theirs to the list (FitPages). */
+        g_pager.active = 0;
+        if (picks == 0 || matched != picks || added > GAME_LIST_MAX) return;
+        memset(&g_pager, 0, sizeof g_pager);
+        g_pager.picks = g_pager.items = g_pager.in_record = picks;
+        g_pager.per_page = GAME_LIST_MAX - added > LIST_SPARE ? GAME_LIST_MAX - added - LIST_SPARE : 1;
+        if (g_pager.per_page < picks) g_pager.per_page = picks; /* they are all in the list until FitPages counts */
+        g_pager.pages = 1;
+        for (uint32_t i = 0; i < after; i++)
+        {
+            const uint8_t* e = record + LOADOUT_SLOTS + i * LOADOUT_SLOT;
+            if (pick_of[i] < 0) { g_pager.fixed_types[g_pager.fixed++] = Get32(e); continue; }
+            memcpy(g_pager.fresh[pick_of[i]], e, LOADOUT_SLOT);
+            memcpy(g_pager.state[pick_of[i]], e, LOADOUT_SLOT);
+            g_pager.shown[pick_of[i]] = 1;
+        }
+        g_pager.active = 1;
+        LOG_ONCE(LOG_PAGE, "record %p: %u picks and %u the game added: %u in all, one page", (void*)record, picks, added,
+                 after);
+        return;
+    }
     char added_list[LOADOUT_MAX * 12] = "";
     for (uint32_t i = 0; i < after; i++)
         if (pick_of[i] < 0 && lstrlenA(added_list) + 12 < (int)sizeof added_list)
@@ -1257,17 +1375,21 @@ static void Augment(uint8_t* record)
     if (matched == picks && added + LIST_SPARE + MIN_PAGE <= GAME_LIST_MAX)
     {
         memset(&g_pager, 0, sizeof g_pager);
-        g_pager.picks = picks;
+        g_pager.picks = g_pager.items = picks;
         g_pager.per_page = GAME_LIST_MAX - LIST_SPARE - added;
+        g_pager.in_record = picks < g_pager.per_page ? picks : g_pager.per_page;
         g_pager.pages = (picks + g_pager.per_page - 1) / g_pager.per_page;
+        g_pager.paged = 1;
         for (uint32_t i = 0; i < after; i++)
         {
             const uint8_t* e = record + LOADOUT_SLOTS + i * LOADOUT_SLOT;
+            if (pick_of[i] < 0 && g_pager.fixed < GAME_LIST_MAX) g_pager.fixed_types[g_pager.fixed++] = Get32(e);
             if (pick_of[i] >= 0)
             {
                 memcpy(g_pager.fresh[pick_of[i]], e, LOADOUT_SLOT);
                 memcpy(g_pager.state[pick_of[i]], e, LOADOUT_SLOT);
                 if ((uint32_t)pick_of[i] >= g_pager.per_page) continue;
+                g_pager.shown[pick_of[i]] = 1;
             }
             memcpy(out[count++], e, LOADOUT_SLOT);
         }
@@ -1304,6 +1426,14 @@ static uint64_t Reset(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t g
         memcpy(g_pager.state, g_pager.fresh, sizeof g_pager.state);
         memset(g_pager.gone, 0, sizeof g_pager.gone);
         g_pager.page = 0;
+        /* the entries taken in are not in the record: they go, and whoever added them adds them again or not */
+        g_pager.items = g_pager.picks;
+        if (g_pager.in_record != 0)
+        {
+            g_pager.per_page = g_pager.in_record;
+            g_pager.pages = (g_pager.picks + g_pager.per_page - 1) / g_pager.per_page;
+        }
+        for (uint32_t k = 0; k < MAX_ITEMS; k++) g_pager.shown[k] = k < g_pager.in_record;
         LOG_ONCE(LOG_PAGE, "pages: the local list was reset (%u before); back to page 1", before);
     }
     return result;
@@ -1314,7 +1444,7 @@ static uint64_t Reset(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t g
 static uint8_t* CopyLoadout(uint64_t unused, uint8_t* out, uint64_t peer)
 {
     uint8_t* result = g_copy_loadout(unused, out, peer);
-    if (!g_pager.active || out == NULL || out[0] == 0 || peer != LocalPeer()) return result;
+    if (!g_pager.active || !g_pager.paged || out == NULL || out[0] == 0 || peer != LocalPeer()) return result;
     uint8_t* record = out + 8;
     uint32_t n = Get32(record + LOADOUT_COUNT);
     if (n > LOADOUT_MAX) return result;
@@ -1345,9 +1475,9 @@ static void LoadAssets(uint8_t* entry, uint32_t stage, uint8_t ack, uint64_t by,
         g_load_assets(entry, stage, ack, by, extra);
         return;
     }
-    for (uint32_t k = 0; k < g_pager.picks && count < HISTORY_MAX; k++)
+    for (uint32_t k = 0; k < g_pager.items && count < HISTORY_MAX; k++)
     {
-        if (g_pager.gone[k] || (k >= PageFirst(g_pager.page) && k < PageEnd(g_pager.page))) continue;
+        if (g_pager.gone[k] || g_pager.shown[k]) continue;
         memcpy(list + LOADOUT_SLOTS + count++ * LOADOUT_SLOT, g_pager.state[k], LOADOUT_SLOT);
     }
     Put32(list + LOADOUT_COUNT, count);
@@ -1382,10 +1512,10 @@ static uint64_t Activate(uint64_t unused, uint64_t peer, uint32_t* armed, void* 
 
     uint32_t i = 0;
     while (i < n && EntryType(list, i) != type) i++;
+    if (i == n) FitPages(list);
     if (i == n)
-        for (uint32_t k = 0; k < g_pager.picks; k++)
-            if (!g_pager.gone[k] && Get32(g_pager.state[k]) == type && (k < PageFirst(g_pager.page) ||
-                k >= PageEnd(g_pager.page)))
+        for (uint32_t k = 0; k < g_pager.items; k++)
+            if (!g_pager.gone[k] && Get32(g_pager.state[k]) == type && !g_pager.shown[k])
             {
                 if (SwitchPage(k / g_pager.per_page, "a stratagem in hand", 1) > 0)
                 {
@@ -1436,7 +1566,7 @@ static int IsEagle(uint32_t type)
     return info != NULL && Get32(info + INFO_LINKED) == TYPE_EAGLE_REARM;
 }
 
-static int OnPage(uint32_t k) { return k >= PageFirst(g_pager.page) && k < PageEnd(g_pager.page); }
+static int OnPage(uint32_t k) { return k < MAX_ITEMS && g_pager.shown[k]; }
 
 /* After the game started a cooldown on the local list's entry `slot`. */
 static void MirrorEagles(uint32_t slot)
@@ -1449,7 +1579,7 @@ static void MirrorEagles(uint32_t slot)
     if (!rearm && !IsEagle(type)) return;
     uint64_t now = Now(), end = Get64(from + ENTRY_COOLDOWN_END);
     uint32_t followed = 0;
-    for (uint32_t k = 0; k < g_pager.picks; k++)
+    for (uint32_t k = 0; k < g_pager.items; k++)
     {
         uint32_t t = Get32(g_pager.state[k]);
         if (g_pager.gone[k] || OnPage(k) || t == type || !IsEagle(t)) continue;
@@ -1468,7 +1598,7 @@ static void MirrorEagles(uint32_t slot)
     {
         uint32_t t = EntryType(list, i);
         if (!IsEagle(t)) continue;
-        for (uint32_t k = 0; k < g_pager.picks; k++)
+        for (uint32_t k = 0; k < g_pager.items; k++)
             if (Get32(g_pager.fresh[k]) == t)
                 LOG_ONCE(LOG_EAGLE, "Eagle Rearm: type %u in the list has %u uses, %u at ready-up", t,
                          Get32(list + LOADOUT_SLOTS + i * LOADOUT_SLOT + ENTRY_USES),
@@ -1499,7 +1629,7 @@ static void CooldownSystems(uint64_t peer, uint32_t slot, uint8_t set_start, flo
 /* An Eagle on another page with uses left. */
 static int EagleLeft(int below_full)
 {
-    for (uint32_t k = 0; k < g_pager.picks && g_eagles_ok; k++)
+    for (uint32_t k = 0; k < g_pager.items && g_eagles_ok; k++)
     {
         if (g_pager.gone[k] || OnPage(k) || !IsEagle(Get32(g_pager.state[k]))) continue;
         uint32_t uses = Get32(g_pager.state[k] + ENTRY_USES);
@@ -1780,6 +1910,39 @@ static void Tick(HfMod* mod, float dt, void* user)
     was_prev = prev;
     was_next = next;
     ULONGLONG ms = GetTickCount64();
+    /* What other mods (or the mission) added to the list since the last update: counted, taken into the pages, and if
+     * the list is then fuller than a page allows, the page is put in again so the rows left free are free again (the
+     * next addition needs them). Held back like any page change while a stratagem is coming in. */
+    if (g_pager.active && hf->game_state(self) == HF_STATE_MISSION)
+    {
+        const uint8_t* now = LocalList();
+        uint32_t n = now != NULL ? Get32(now + LOADOUT_COUNT) : 0;
+        if (now != NULL && !g_pager.checked && n >= g_pager.in_record && n <= GAME_LIST_MAX)
+        {
+            /* the record the pages were set up from must be this player's: its picks are in this player's list */
+            uint8_t taken[GAME_LIST_MAX] = { 0 };
+            uint32_t seen = 0;
+            for (uint32_t k = 0; k < g_pager.in_record; k++)
+            {
+                uint32_t type = Get32(g_pager.state[k]), i = 0;
+                while (i < n && (taken[i] || EntryType(now, i) != type)) i++;
+                if (i < n) { taken[i] = 1; seen++; }
+            }
+            g_pager.checked = 1;
+            if (seen < g_pager.in_record)
+            {
+                LOG_ONCE(LOG_PAGE, "pages: only %u of the record's %u picks are in the local list (another player's "
+                         "record?): no pages this mission", seen, g_pager.in_record);
+                g_pager.active = 0;
+            }
+        }
+        if (now != NULL && g_pager.active && g_pager.checked && FitPages(now) > g_pager.per_page)
+        {
+            g_refitting = 1;
+            SwitchPage(g_pager.page, "room in the list", 0);
+            g_refitting = 0;
+        }
+    }
     int live = g_pager.active && g_pager.pages >= 2 && g_list_is_open &&
                (!g_label_ok || ms - (ULONGLONG)g_list_seen < WHEEL_LIVE_MS) && GameFocused();
     InterlockedExchange64(&g_wheel_until, live ? (LONG64)(ms + WHEEL_LIVE_MS) : 0);
@@ -1906,7 +2069,12 @@ static const char kDefaultSettings[] =
     "# While a stratagem of the page shown is being called in (or is in hand), the page doesn't change (on). With off it\r\n"
     "# changes at once: the stratagem still comes in, but until it lands its row shows the new page's stratagem as the\r\n"
     "# one coming in.\r\n"
-    "page_hold = on\r\n";
+    "page_hold = on\r\n"
+    "\r\n"
+    "# Stratagems that other mods add to your list during a mission (P.S.S. extras, for example) go in the pages after\r\n"
+    "# your own (on). With off they stay on every page, which leaves less room for yours on each page. The mission's own\r\n"
+    "# (Reinforce, Resupply, SOS Beacon, objective stratagems) are on every page either way.\r\n"
+    "page_added = on\r\n";
 
 /* The file's path: the mod's folder is mods\<folder>, or deeper for a zip (mods\.unpacked\<zip>). */
 static int SettingsPath(char* path, size_t size, wchar_t* wide, int wide_count)
@@ -2000,11 +2168,12 @@ static void ReadSettings(void)
             }
             int is_wheel = key_len == 10 && memcmp(line, "page_wheel", 10) == 0;
             int is_hold = key_len == 9 && memcmp(line, "page_hold", 9) == 0;
-            if (is_wheel || is_hold)
+            int is_added = key_len == 10 && memcmp(line, "page_added", 10) == 0;
+            if (is_wheel || is_hold || is_added)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
-                *(is_wheel ? &g_wheel_on : &g_page_hold) = !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 ||
+                *(is_wheel ? &g_wheel_on : is_hold ? &g_page_hold : &g_page_added) = !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 ||
                                                              _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
@@ -2022,8 +2191,8 @@ static void ReadSettings(void)
         line = end != NULL ? end + 1 : NULL;
     }
     hf->log(self, "read %s: slots = %u, per_row = %u (before limits), page keys 0x%02X / 0x%02X, page_wheel %s, "
-            "page_hold %s", path, g_slots, g_per_row, g_key_prev, g_key_next, g_wheel_on ? "on" : "off",
-            g_page_hold ? "on" : "off");
+            "page_hold %s, page_added %s", path, g_slots, g_per_row, g_key_prev, g_key_next, g_wheel_on ? "on" : "off",
+            g_page_hold ? "on" : "off", g_page_added ? "on" : "off");
 }
 
 /* ---- start ------------------------------------------------------------------------------------------------------- */
