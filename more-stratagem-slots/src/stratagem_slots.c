@@ -59,6 +59,8 @@
                                          types like Eagle Rearm, mission stratagems...), unchecked */
 #define RVA_PROFILE_LOAD 0x17514C0u   /* (record) -> record: fills it from the profile at boot, but only up to 4 slots'
                                        * cost (StratagemInfo+0xBC summed, 0x17521CD) and 16 entries */
+#define RVA_PROFILE_KEEP_A 0x11F507Bu   /* the return addresses of the load's two callers that keep the loadout; its */
+#define RVA_PROFILE_KEEP_B 0x1754122u   /* other three (0x10853B3, 0x1088CD0, 0x136BCEA) feed the player history */
 #define RVA_PROFILE_LOAD_PROFILE 0x17515E6u /* mov r14, [game + RVA_G_PROFILE]; cmp [r14 + 0x3C], dil */
 #define RVA_G_PROFILE 0x347CDD8u      /* pointer: the profile; +0x3C a loadout is saved, +0x4C 32 {stable id, uses} */
 #define RVA_BROADCAST_COMMIT 0x189D24Du /* LobbyCard_CommitAndBroadcast: lea rcx, [rbx + 0x5B78]; call commit (a local copy
@@ -304,7 +306,6 @@ typedef uint8_t (*CursorOverFn)(uint8_t* cursor, uint8_t* node, uint64_t zero);
 typedef void (*ApplyStateFn)(uint8_t* widget);
 typedef uint8_t (*IsHoveredFn)(uint8_t* widget);
 typedef void (*AugmentFn)(uint8_t* record);
-typedef void (*HistoryFn)(uint64_t unused, uint64_t peer, uint8_t* record, uint64_t flag);
 typedef uint8_t* (*ProfileLoadFn)(uint8_t* record);
 typedef void (*LoadAssetsFn)(uint8_t* entry, uint32_t stage, uint8_t ack, uint64_t by, uint32_t extra);
 typedef uint64_t (*ActivateFn)(uint64_t unused, uint64_t peer, uint32_t* armed, void* where, uint8_t flag);
@@ -367,7 +368,6 @@ static CursorOverFn cursor_over;
 static ApplyStateFn apply_state;
 static IsHoveredFn is_hovered;
 static AugmentFn g_augment;
-static HistoryFn g_history;
 static ProfileLoadFn g_profile_load;
 static LoadAssetsFn g_load_assets;
 static ActivateFn g_activate;
@@ -1321,6 +1321,15 @@ static void Augment(uint8_t* record)
     if (record == NULL || picks > MAX_SLOTS)
     {
         g_augment(record);
+        /* not a loadout of this mod's: its first 16 at most go on (the player history takes no more) */
+        uint32_t now = record != NULL ? Get32(record + LOADOUT_COUNT) : 0;
+        if (now > GAME_LIST_MAX && now <= LOADOUT_MAX)
+        {
+            memset(record + LOADOUT_SLOTS + GAME_LIST_MAX * LOADOUT_SLOT, 0, (size_t)(now - GAME_LIST_MAX) * LOADOUT_SLOT);
+            Put32(record + LOADOUT_COUNT, GAME_LIST_MAX);
+            LOG_ONCE(LOG_GUARD, "record %p: %u entries after the game's additions; it keeps its first 16", (void*)record,
+                     now);
+        }
         return;
     }
     uint32_t pick_types[MAX_SLOTS];
@@ -1958,42 +1967,43 @@ static void Tick(HfMod* mod, float dt, void* user)
     else InterlockedExchange(&g_wheel_steps, 0); /* held back: drop the rest of the wheel's steps */
 }
 
-/* The copy that crashed: a record of more than 16 entries reaching it by another way goes in as a copy holding its
- * first 16. */
-static void History(uint64_t unused, uint64_t peer, uint8_t* record, uint64_t flag)
-{
-    uint32_t count = record != NULL ? Get32(record + LOADOUT_COUNT) : 0;
-    if (count <= GAME_LIST_MAX || count > LOADOUT_MAX)
-    {
-        g_history(unused, peer, record, flag);
-        return;
-    }
-    uint8_t copy[LOADOUT_SIZE];
-    memcpy(copy, record, LOADOUT_SIZE);
-    memset(copy + LOADOUT_SLOTS + GAME_LIST_MAX * LOADOUT_SLOT, 0, (size_t)(count - GAME_LIST_MAX) * LOADOUT_SLOT);
-    Put32(copy + LOADOUT_COUNT, GAME_LIST_MAX);
-    LOG_ONCE(LOG_GUARD, "player history: record %p holds %u entries; the game's lists take 16, so it gets its first 16",
-             (void*)record, count);
-    g_history(unused, peer, copy, flag);
-}
-
 /* ---- the profile ------------------------------------------------------------------------------------------------- */
 
 /* At boot the game loads the loadout from the profile, but stops once the slots' cost comes to 4: the extra slots,
  * saved with the rest, came back empty after a restart. The profile's pairs are in slot order, so after the game's
  * load the picks are filled again from all of them, up to the slot setting, the way the game reads a pair (uses 0 is
  * an empty pair, an unknown stable id is skipped). Only when the game's own picks are the first of those: anything
- * else is a choice of the game's this mod does not know, and it is left as it is. */
+ * else is a choice of the game's this mod does not know, and it is left as it is.
+ *
+ * The game calls the load from five places. Three hand a copy of the result straight to the player history
+ * (0x13620A0: host start, join, the end of the profile's loading), whose lists take 16 and no more: for those, and
+ * for a caller this mod does not know, the picks stop at 16. Only the two that keep the loadout get every slot. (A
+ * hook on the player history did this before; it changed code that HD2 Transmog checks, which switched its Custom
+ * Variants off.) */
 static uint8_t* ProfileLoad(uint8_t* record)
 {
+    uintptr_t from = (uintptr_t)__builtin_return_address(0) - (uintptr_t)game;
     uint8_t* result = g_profile_load(record);
     const uint8_t* profile = *(const uint8_t* const*)(game + RVA_G_PROFILE);
     if (record == NULL || profile == NULL || profile[PROFILE_HAS_LOADOUT] == 0) return result;
     uint32_t loaded = Get32(record + LOADOUT_COUNT);
     if (loaded > LOADOUT_MAX) return result;
 
+    uint32_t limit = g_slots;
+    if (limit > GAME_LIST_MAX)
+    {
+        if (from == RVA_PROFILE_KEEP_A || from == RVA_PROFILE_KEEP_B)
+            LOG_ONCE(LOG_PROFILE, "profile load for 0x%llX: every slot", (unsigned long long)from);
+        else
+        {
+            limit = GAME_LIST_MAX;
+            LOG_ONCE(LOG_PROFILE, "profile load for 0x%llX: the first 16 picks at most (the player history's limit)",
+                     (unsigned long long)from);
+        }
+    }
+
     uint32_t types[MAX_SLOTS], uses[MAX_SLOTS], n = 0;
-    for (uint32_t i = 0; i < PROFILE_PAIR_COUNT && n < g_slots; i++)
+    for (uint32_t i = 0; i < PROFILE_PAIR_COUNT && n < limit; i++)
     {
         const uint8_t* pair = profile + PROFILE_PAIRS + i * 8u;
         uint32_t stable = Get32(pair), use = Get32(pair + 4);
@@ -2228,7 +2238,6 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
     /* The guards on the game's limit of 16 first, then the commit, so the record keeps its extra slots from the first
      * refresh on. */
     static const struct { uint32_t rva; void* detour; void** original; } hooks[] = {
-        { RVA_HISTORY, (void*)History, (void**)&g_history },
         { RVA_AUGMENT, (void*)Augment, (void**)&g_augment },
         { RVA_RESET, (void*)Reset, (void**)&g_reset },
         { RVA_LOAD_ASSETS, (void*)LoadAssets, (void**)&g_load_assets },
