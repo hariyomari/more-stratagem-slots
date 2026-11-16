@@ -9,7 +9,7 @@
 set -eu
 
 mod=more-stratagem-slots
-root=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd) # the repository's root: this script is in scripts/
 hf=${1:-${HELLFORGE:-}}
 if [ -z "$hf" ]; then
     echo "Give your HellForge folder: ./package.sh ~/HellForge  (or set the HELLFORGE environment variable)" >&2

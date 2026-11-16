@@ -9,7 +9,8 @@ rem from the HELLFORGE environment variable.
 setlocal
 
 set "MOD=more-stratagem-slots"
-set "ROOT=%~dp0"
+rem The repository's root: this script is in scripts\
+for %%I in ("%~dp0..") do set "ROOT=%%~fI\"
 set "HF=%~1"
 if "%HF%"=="" set "HF=%HELLFORGE%"
 if "%HF%"=="" (
