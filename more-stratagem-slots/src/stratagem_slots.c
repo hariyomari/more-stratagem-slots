@@ -447,7 +447,7 @@ static int g_park_ok;             /* parking's code matched (and the label's hoo
 static int g_activating_local;    /* inside the game's activation of a local player's stratagem */
 static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
-static int g_wheel_invert;        /* page_wheel_invert: wheel up is the next page, not the previous */
+static int g_wheel_invert;        /* page_wheel_invert: wheel up is the previous page, not the next */
 static int g_page_lock;           /* page_lock: no page change while a stratagem of the page is called in or in hand */
 static int g_follow_ok;           /* the in-hand record's code matched (and the Eagles' is there): the pages can follow
                                    * a stratagem in hand */
@@ -2430,7 +2430,7 @@ static int GameFocused(void)
 
 /* GetAsyncKeyState has no wheel, and the mod has no way into the game's own input on its update, so a low-level mouse
  * hook on a thread of the mod's own sees the wheel. While the list is open with pages and the game has focus, each
- * notch (120) counts a step, up = previous page (the next with page_wheel_invert), and the wheel message goes no
+ * notch (120) counts a step, up = next page (the previous with page_wheel_invert), and the wheel message goes no
  * further (best effort: a game reading raw input may still see it). The game update takes the steps. "Open" expires by itself (g_wheel_until, renewed by
  * every game update that sees the list open and, with the label's hook, drawn), so the wheel is never kept from
  * anything else if the game stops updating or the list goes away without closing. */
@@ -2450,7 +2450,7 @@ static LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data)
         else
         {
             rest += (short)HIWORD(((const MSLLHOOKSTRUCT*)data)->mouseData);
-            LONG up = g_wheel_invert ? 1 : -1;
+            LONG up = g_wheel_invert ? -1 : 1;
             for (; rest >= WHEEL_DELTA; rest -= WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, up);
             for (; rest <= -WHEEL_DELTA; rest += WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, -up);
             return 1;
@@ -2681,7 +2681,7 @@ static void Tick(HfMod* mod, float dt, void* user)
     if (!press_next && !press_prev && (wheel > 1 || wheel < -1))
         InterlockedExchangeAdd(&g_wheel_steps, wheel - step); /* the rest for the next updates */
     const char* why = press_next ? "next key" : press_prev ? "previous key" :
-                      (step > 0) != (g_wheel_invert != 0) ? "wheel down" : "wheel up";
+                      (step > 0) != (g_wheel_invert != 0) ? "wheel up" : "wheel down";
     uint32_t to = step > 0 ? (g_pager.page + 1) % g_pager.pages : (g_pager.page + g_pager.pages - 1) % g_pager.pages;
     if (SwitchPage(to, why, 0) > 0) play_sound(0, SOUND_MOVE);
     else InterlockedExchange(&g_wheel_steps, 0); /* held back: drop the rest of the wheel's steps */
@@ -2784,8 +2784,8 @@ static const char kDefaultSettings[] =
     "page_prev = Q\r\n"
     "page_next = E\r\n"
     "\r\n"
-    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off): wheel up is the previous page,\r\n"
-    "# wheel down the next one. With page_wheel_invert on it is the other way around.\r\n"
+    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off): wheel up is the next page,\r\n"
+    "# wheel down the previous one. With page_wheel_invert on it is the other way around.\r\n"
     "page_wheel = on\r\n"
     "page_wheel_invert = off\r\n"
     "\r\n"
