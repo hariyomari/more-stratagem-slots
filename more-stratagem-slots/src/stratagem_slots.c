@@ -447,6 +447,7 @@ static int g_park_ok;             /* parking's code matched (and the label's hoo
 static int g_activating_local;    /* inside the game's activation of a local player's stratagem */
 static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
+static int g_wheel_invert;        /* page_wheel_invert: wheel up is the next page, not the previous */
 static int g_page_lock;           /* page_lock: no page change while a stratagem of the page is called in or in hand */
 static int g_follow_ok;           /* the in-hand record's code matched (and the Eagles' is there): the pages can follow
                                    * a stratagem in hand */
@@ -2429,8 +2430,8 @@ static int GameFocused(void)
 
 /* GetAsyncKeyState has no wheel, and the mod has no way into the game's own input on its update, so a low-level mouse
  * hook on a thread of the mod's own sees the wheel. While the list is open with pages and the game has focus, each
- * notch (120) counts a step, up = previous page, and the wheel message goes no further (best effort: a game reading
- * raw input may still see it). The game update takes the steps. "Open" expires by itself (g_wheel_until, renewed by
+ * notch (120) counts a step, up = previous page (the next with page_wheel_invert), and the wheel message goes no
+ * further (best effort: a game reading raw input may still see it). The game update takes the steps. "Open" expires by itself (g_wheel_until, renewed by
  * every game update that sees the list open and, with the label's hook, drawn), so the wheel is never kept from
  * anything else if the game stops updating or the list goes away without closing. */
 #define WHEEL_LIVE_MS 250u
@@ -2449,8 +2450,9 @@ static LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data)
         else
         {
             rest += (short)HIWORD(((const MSLLHOOKSTRUCT*)data)->mouseData);
-            for (; rest >= WHEEL_DELTA; rest -= WHEEL_DELTA) InterlockedDecrement(&g_wheel_steps);
-            for (; rest <= -WHEEL_DELTA; rest += WHEEL_DELTA) InterlockedIncrement(&g_wheel_steps);
+            LONG up = g_wheel_invert ? 1 : -1;
+            for (; rest >= WHEEL_DELTA; rest -= WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, up);
+            for (; rest <= -WHEEL_DELTA; rest += WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, -up);
             return 1;
         }
     }
@@ -2678,7 +2680,8 @@ static void Tick(HfMod* mod, float dt, void* user)
     if (step == 0) return;
     if (!press_next && !press_prev && (wheel > 1 || wheel < -1))
         InterlockedExchangeAdd(&g_wheel_steps, wheel - step); /* the rest for the next updates */
-    const char* why = press_next ? "next key" : press_prev ? "previous key" : step > 0 ? "wheel down" : "wheel up";
+    const char* why = press_next ? "next key" : press_prev ? "previous key" :
+                      (step > 0) != (g_wheel_invert != 0) ? "wheel down" : "wheel up";
     uint32_t to = step > 0 ? (g_pager.page + 1) % g_pager.pages : (g_pager.page + g_pager.pages - 1) % g_pager.pages;
     if (SwitchPage(to, why, 0) > 0) play_sound(0, SOUND_MOVE);
     else InterlockedExchange(&g_wheel_steps, 0); /* held back: drop the rest of the wheel's steps */
@@ -2781,8 +2784,10 @@ static const char kDefaultSettings[] =
     "page_prev = Q\r\n"
     "page_next = E\r\n"
     "\r\n"
-    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off).\r\n"
+    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off): wheel up is the previous page,\r\n"
+    "# wheel down the next one. With page_wheel_invert on it is the other way around.\r\n"
     "page_wheel = on\r\n"
+    "page_wheel_invert = off\r\n"
     "\r\n"
     "# Stops you from switching pages while a stratagem is in your hand or being called in (on). With off you can switch\r\n"
     "# at any time, and a stratagem in your hand stays in the list until it has been called in.\r\n"
@@ -2894,11 +2899,13 @@ static void ReadSettings(void)
             /* (page_hold, 0.1's setting with on as its default, is not read any more: every file made then has it on,
              * and the pages no longer need it) */
             if (key_len == 9 && memcmp(line, "page_hold", 9) == 0) old_hold = 1;
-            if (is_wheel || is_lock || is_added || is_rearm)
+            int is_invert = key_len == 17 && memcmp(line, "page_wheel_invert", 17) == 0;
+            if (is_wheel || is_lock || is_added || is_rearm || is_invert)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
-                *(is_wheel ? &g_wheel_on : is_lock ? &g_page_lock : is_added ? &g_page_added : &g_page_rearm) =
+                *(is_wheel ? &g_wheel_on : is_lock ? &g_page_lock : is_added ? &g_page_added : is_rearm ? &g_page_rearm :
+                  &g_wheel_invert) =
                     !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 || _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
@@ -2916,8 +2923,9 @@ static void ReadSettings(void)
         line = end != NULL ? end + 1 : NULL;
     }
     hf->log(self, "read %s: slots = %u, per_row = %u (before limits), page keys 0x%02X / 0x%02X, page_wheel %s, "
-            "page_lock %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev, g_key_next,
-            g_wheel_on ? "on" : "off", g_page_lock ? "on" : "off", g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
+            "page_wheel_invert %s, page_lock %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev,
+            g_key_next, g_wheel_on ? "on" : "off", g_wheel_invert ? "on" : "off", g_page_lock ? "on" : "off",
+            g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
     if (old_hold)
         hf->log(self, "page_hold in %s is not a setting any more and was not read: pages change at any time now. "
                 "page_lock = on brings the old behaviour back", path);
