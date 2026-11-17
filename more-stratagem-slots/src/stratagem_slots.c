@@ -474,9 +474,9 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PROFILE, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE,
-       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_KINDS };
+       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 500, 24, 6, 40, 600, 12, 120, 600, 200 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -1100,12 +1100,14 @@ typedef struct
     uint8_t held[MAX_ITEMS];      /* ... though not of the page shown: in hand, landing or still being called in (see
                                    * "the stratagem in hand") */
     uint64_t held_until[MAX_ITEMS]; /* GetTickCount64: a held item stays at least until then after it left the hand */
+    uint8_t rearm[MAX_ITEMS];     /* spent, and its uses come back when its cooldown ends (see "uses that rearm") */
     /* parking: the game's entries taken out of the record at ready-up, each in the list only while it can be used */
     uint32_t parks;
     uint8_t park_fresh[GAME_LIST_MAX][LOADOUT_SLOT]; /* its entry at ready-up */
     uint8_t park_state[GAME_LIST_MAX][LOADOUT_SLOT]; /* its entry now (in the list: as of the last change) */
     uint8_t park_in[GAME_LIST_MAX];   /* put in the list by the last change */
     uint8_t park_gone[GAME_LIST_MAX]; /* left the list during the mission (used up) */
+    uint8_t park_rearm[GAME_LIST_MAX]; /* spent, and its uses come back when its cooldown ends, as a pick's do */
     volatile uint8_t park_want[GAME_LIST_MAX]; /* the game would show it now (ParkAsk, in the HUD list's update) */
 } Pager;
 static Pager g_pager;
@@ -1874,10 +1876,12 @@ static uint64_t Reset(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t g
         for (uint32_t k = 0; k < MAX_ITEMS; k++) g_pager.shown[k] = k < g_pager.in_record;
         memset(g_pager.held, 0, sizeof g_pager.held);
         memset(g_pager.held_until, 0, sizeof g_pager.held_until);
+        memset(g_pager.rearm, 0, sizeof g_pager.rearm);
         /* the parked entries are not in the record either: all out again, as at ready-up */
         memcpy(g_pager.park_state, g_pager.park_fresh, sizeof g_pager.park_state);
         memset(g_pager.park_in, 0, sizeof g_pager.park_in);
         memset(g_pager.park_gone, 0, sizeof g_pager.park_gone);
+        memset(g_pager.park_rearm, 0, sizeof g_pager.park_rearm);
         for (uint32_t c = 0; c < GAME_LIST_MAX; c++) g_pager.park_want[c] = 0;
         LOG_ONCE(LOG_PAGE, "pages: the local list was reset (%u before); back to page 1", before);
     }
@@ -2060,6 +2064,141 @@ static void ListOpen(uint8_t* hud, uint8_t open)
     g_list_is_open = hud != NULL && hud[HUD_LIST_OPEN] != 0;
 }
 
+/* ---- uses that rearm --------------------------------------------------------------------------------------------- */
+
+/* HellForge 0.5's "rearms after uses" (a stats option, its docs/modding/stats-mods.md): a ticked stratagem's uses go
+ * with no cooldown between them, the cooldown starts once they are spent, and when it ends they come back. HellForge
+ * hooks the cooldown start too (this mod's detour runs first and calls its): spent, it notes the list row, and its
+ * update refills that row after the cooldown, but only while the row holds the same type; a row seen with another
+ * type is forgotten. A page change puts other entries in the rows, so a stratagem spent on one page would stay at 0
+ * uses. The same is done here by entry instead of by row: an entry of this mod's (a pick, or a parked entry) that is
+ * spent when its cooldown starts is marked, and the update gives it its uses at ready-up back once the cooldown has
+ * ended, in the list on whatever row or out of it. A row that kept its entry is refilled by HellForge (its update
+ * runs before the mods'), and the mark just goes. The game's own entries that stay on every page are not kept here:
+ * their refill is HellForge's alone.
+ * Only RVA_COOLDOWN marks: every use starts its cooldown there (research/page-change-findings.md) and it is the one
+ * HellForge hooks; RVA_COOLDOWN_SYSTEMS sets a cooldown without a use.
+ * The tick is HellForge's StratagemRearm table (SDK 20's hellforge_components.h: a u32 by stratagem type, 1 ticked),
+ * read with get_live when the cooldown starts, since it can change while the game runs. An older HellForge has no
+ * such table and is not asked, and a type HellForge refuses the tick on (Eagles, Eagle Rearm, team cooldowns, mods'
+ * stratagems) has no row: not ticked, and nothing here runs. */
+#define REARM_SDK 20u            /* the first SDK whose loader has the table (an older one logs every read of it) */
+static int RearmsAfterUses(uint32_t type)
+{
+    /* HF_FIELD(StratagemRearm, rearms) spelled out: SDK 16's hellforge_components.h has no HfStratagemRearm */
+    static const HfField rearms = { "StratagemRearm", 25480438u, 0, 4, HF_TYPE_U32, __LINE__ };
+    HfLiveValue live;
+    if (hf->version < REARM_SDK) return 0;
+    return hf->get_live(self, type, &rearms, &live) != 0 && (uint32_t)live.now.number == 1u;
+}
+
+/* Where this mod's entries in the list are now, as a page change finds them (by type, in order): each item's row and
+ * each parked entry's, or -1. */
+static void FindEntries(const uint8_t* list, uint32_t n, int* found, int* park_row)
+{
+    uint8_t taken[GAME_LIST_MAX] = { 0 };
+    for (uint32_t k = 0; k < MAX_ITEMS; k++) found[k] = -1;
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        if (!g_pager.shown[k] || g_pager.gone[k]) continue;
+        uint32_t type = Get32(g_pager.state[k]), i = 0;
+        while (i < n && (taken[i] || EntryType(list, i) != type)) i++;
+        if (i == n) continue;
+        taken[i] = 1;
+        found[k] = (int)i;
+    }
+    FindParks(list, n, taken, park_row);
+}
+
+/* After the game started a cooldown on the local list's entry `slot`: spent and ticked, it is marked. */
+static void RearmMark(uint32_t slot)
+{
+    const uint8_t* list = LocalList();
+    uint32_t n = list != NULL ? Get32(list + LOADOUT_COUNT) : 0;
+    if (list == NULL || n > GAME_LIST_MAX || slot >= n) return;
+    const uint8_t* e = list + LOADOUT_SLOTS + slot * LOADOUT_SLOT;
+    uint32_t type = Get32(e);
+    if (Get32(e + ENTRY_USES) != 0 || !RearmsAfterUses(type)) return;
+    int found[MAX_ITEMS], park_row[GAME_LIST_MAX];
+    FindEntries(list, n, found, park_row);
+    uint8_t* mark = NULL;
+    const uint8_t* fresh = NULL;
+    for (uint32_t k = 0; k < g_pager.items; k++)
+        if (found[k] == (int)slot) { mark = &g_pager.rearm[k]; fresh = g_pager.fresh[k]; }
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+        if (park_row[c] == (int)slot) { mark = &g_pager.park_rearm[c]; fresh = g_pager.park_fresh[c]; }
+    if (mark == NULL)
+    {
+        LOG_ONCE(LOG_REARM, "rearm: type %u in row %u is spent and rearms after uses, but its entry is the game's own "
+                 "(not a pick or a parked entry): its refill is left to HellForge", type, slot + 1);
+        return;
+    }
+    uint32_t full = Get32(fresh + ENTRY_USES);
+    if (*mark || full == 0) return; /* marked by an earlier call for the same use, or nothing to give back */
+    *mark = 1;
+    LOG_ONCE(LOG_REARM, "rearm: type %u in row %u (page %u shown) is spent and rearms after uses: marked, its %u uses "
+             "come back when its cooldown ends, in %d ms, wherever it is then", type, slot + 1, g_pager.page + 1, full,
+             (int)(((int64_t)Get64(e + ENTRY_COOLDOWN_END) - (int64_t)Now()) / 1000));
+}
+
+/* One marked entry at `now` (NULL: used up, it left the list), with its row (or -1) and its page (0: a parked entry)
+ * for the log: 1 once done with, 0 while its cooldown runs. */
+static int RearmDone(uint8_t* entry, const uint8_t* fresh, int row, uint32_t page, uint64_t now)
+{
+    uint32_t type = Get32(fresh), full = Get32(fresh + ENTRY_USES);
+    if (entry == NULL)
+    {
+        LOG_ONCE(LOG_REARM, "rearm: type %u was used up and left the list before its cooldown ended: not refilled",
+                 type);
+        return 1;
+    }
+    uint32_t left = Get32(entry + ENTRY_USES);
+    if (left == 0 && now < Get64(entry + ENTRY_COOLDOWN_END)) return 0;
+    char where[48];
+    if (row >= 0) wsprintfA(where, page != 0 ? "in row %d" : "a parked entry in row %d", row + 1);
+    else if (page != 0) wsprintfA(where, "out of the list, on page %u", page);
+    else lstrcpyA(where, "parked, out of the list");
+    if (left != 0)
+    {
+        LOG_ONCE(LOG_REARM, "rearm: type %u (%s) has %u uses again, not from this mod (HellForge refills a row that "
+                 "kept its entry)", type, where, left);
+        return 1;
+    }
+    Put32(entry + ENTRY_USES, full);
+    LOG_ONCE(LOG_REARM, "rearm: type %u (%s) refilled now that its cooldown has ended: %u uses", type, where, full);
+    return 1;
+}
+
+/* Every update: the marked entries whose cooldown has ended get their uses at ready-up back, wherever they are. */
+static void RearmTick(void)
+{
+    if (memchr(g_pager.rearm, 1, sizeof g_pager.rearm) == NULL &&
+        memchr(g_pager.park_rearm, 1, sizeof g_pager.park_rearm) == NULL) return;
+    uint8_t* list = LocalList();
+    uint32_t n = list != NULL ? Get32(list + LOADOUT_COUNT) : 0;
+    uint64_t now = Now();
+    if (list == NULL || n > GAME_LIST_MAX || now == 0) return;
+    int found[MAX_ITEMS], park_row[GAME_LIST_MAX];
+    FindEntries(list, n, found, park_row);
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        if (!g_pager.rearm[k]) continue;
+        uint8_t* entry = found[k] >= 0 ? list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT : g_pager.state[k];
+        /* used up, as a page change tells it (in a full list its row was written over: its state here is its entry) */
+        if (g_pager.gone[k] || (g_pager.shown[k] && found[k] < 0 && n < GAME_LIST_MAX)) entry = NULL;
+        if (RearmDone(entry, g_pager.fresh[k], found[k], g_pager.per_page != 0 ? k / g_pager.per_page + 1 : 1, now))
+            g_pager.rearm[k] = 0;
+    }
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+    {
+        if (!g_pager.park_rearm[c]) continue;
+        uint8_t* entry = park_row[c] >= 0 ? list + LOADOUT_SLOTS + (uint32_t)park_row[c] * LOADOUT_SLOT :
+                         g_pager.park_state[c];
+        if (g_pager.park_gone[c] || ParkUsedUp(c, park_row, n)) entry = NULL;
+        if (RearmDone(entry, g_pager.park_fresh[c], park_row[c], 0, now)) g_pager.park_rearm[c] = 0;
+    }
+}
+
 /* ---- Eagles ------------------------------------------------------------------------------------------------------ */
 
 /* The game keeps its Eagles together only within the list: a cooldown starting on one Eagle (or on Eagle Rearm) is
@@ -2144,6 +2283,7 @@ static void Cooldown(uint8_t* history, uint64_t peer, uint32_t slot, uint8_t set
                  g_pager.page + 1, (int)(((int64_t)Get64(e + ENTRY_CALL_END) - (int64_t)Now()) / 1000));
     }
     MirrorEagles(slot);
+    RearmMark(slot);
 }
 
 static void CooldownSystems(uint64_t peer, uint32_t slot, uint8_t set_start, float seconds)
@@ -2664,6 +2804,7 @@ static void Tick(HfMod* mod, float dt, void* user)
                 g_pager.active = 0;
             }
         }
+        if (now != NULL && g_pager.active && g_pager.checked && g_eagles_ok) RearmTick();
         if (now != NULL && g_pager.active && g_pager.checked && g_follow_ok) FollowHand(ms);
         if (now != NULL && g_pager.active && g_pager.checked && FitPages(now) > g_pager.per_page)
         {
