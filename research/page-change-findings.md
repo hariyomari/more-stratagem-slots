@@ -108,9 +108,19 @@ One session of the first 0.2.0 build, 139 activations, from the mod's log:
   Its hook has not run in game.
 - No page change was held back.
 
+## After the mission
+
+When the mission ends the game puts the profile's loadout (its first 16 picks, through 0x17514C0 called from
+0x1088CD0) in the local player's list, 2 to 5 s before it resets the list and while HellForge still reports the
+mission's state. The picks are the pages' own types, so the mod's update took the list for a page too full and cut
+it down (16 to 14 after the first mission, 16 to 13 with another page's entries after the second). Versions before
+0.2.0 did the same. Nothing was seen to go wrong after: the loadout screen had every slot and the next mission got
+all 20 picks. From 0.2.0 the update leaves a list alone that holds none of the game's entries from ready-up
+(Reinforce, Resupply...).
+
 ## Still to see in game
 
-- The two fixes above.
+- The two fixes above, and the list left alone after the mission (`pages: none of the game's ...` in the log).
 - A thrown ball that ends without an activation (0x66EE10).
 - Which phase showed the wrong name in 0.1.4 with `page_hold = off`. By the above it can only have been the moment
   between the code and the list closing, and the 1.5 s flash.
