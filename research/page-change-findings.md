@@ -114,14 +114,30 @@ When the mission ends the game puts the profile's loadout (its first 16 picks, t
 0x1088CD0) in the local player's list, 2 to 5 s before it resets the list and while HellForge still reports the
 mission's state. The picks are the pages' own types, so the mod's update took the list for a page too full and cut
 it down (16 to 14 after the first mission, 16 to 13 with another page's entries after the second). Versions before
-0.2.0 did the same. Nothing was seen to go wrong after: the loadout screen had every slot and the next mission got
-all 20 picks. From 0.2.0 the update leaves a list alone that holds none of the game's entries from ready-up
+0.2.0 did the same. Nothing was seen to go wrong after: the next mission, its stratagems picked again by the player,
+got all 20 picks. From 0.2.0 the update leaves a list alone that holds none of the game's entries from ready-up
 (Reinforce, Resupply...).
+
+## Seen in game after the fixes (2026-11-17, HellForge 0.5.0 nightly, solo, two missions, no P.S.S.)
+
+One session of the build as committed (the mod's source in the session is the repository's), from the mod's log and
+the player's report:
+
+- No stratagem showed by itself after a page change and the list closing. The rows that changed lost a linger of
+  2 s 13 times (all state 1, the "ready again" case) and a flash once.
+- The stale record did nothing: no stratagem was put in the list for it (0 times, 18 in the first session).
+- 13 page changes with a stratagem in hand; all 27 checks of the record's row found it kept. Every entry kept from
+  another page was out of the list again once its own page came back or it was called in; none was left in the list.
+- After both missions the list was left alone (`pages: none of the game's 5 entries ...`; the list still had its 16
+  entries when the game loaded its packages, 14 and 5 in the first session) and reset by the game 2 s later. The
+  second mission had all 20 slots and stratagems, and its pages changed as in the first.
+- No page change was held back, no activation needed its row looked up, no pick was taken as used up.
+- 0x66EE10 was hooked alone in its chain in both sessions (17 mods loaded in the first).
 
 ## Still to see in game
 
-- The two fixes above, and the list left alone after the mission (`pages: none of the game's ...` in the log).
-- A thrown ball that ends without an activation (0x66EE10).
+- A thrown ball that ends without an activation (0x66EE10): its hook has not run.
+- A page change held back for want of a free row, and a pick missing from a full list.
 - Which phase showed the wrong name in 0.1.4 with `page_hold = off`. By the above it can only have been the moment
   between the code and the list closing, and the 1.5 s flash.
 
