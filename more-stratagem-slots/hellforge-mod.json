@@ -2,7 +2,7 @@
   "format": 1,
   "id": "hariyomari.more-stratagem-slots",
   "name": "More Stratagem Slots",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Allows up to 20 stratagem slots up from the default 4 to be selected in the loadout screen. Q/E or MWHEEL UP/DOWN to switch pages. You can switch pages at any time, and to stop pages from switching while a stratagem is being called in/activated, set 'page_lock = on' in the settings INI file (more-stratagem-slots.ini).",
   "url": "https://github.com/hariyomari/more-stratagem-slots",
   "gameplay": true,
