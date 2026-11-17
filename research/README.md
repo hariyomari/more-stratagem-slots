@@ -46,6 +46,8 @@ above four (default 8), for game build 25480438
 - `history-callers-findings.md`: the callers of the player history, for the 0.1.2 change that stopped hooking it.
 - `availability-findings.md`: when the game shows and takes a list entry (0x66C920), the input's matching, the HUD
   list's order, and why the mod cannot change its settings file while the game runs. The reason for 0.1.4's parking.
+- `page-change-findings.md`: what the game ties to a list row past the frame it reads it in (the in-hand record, the
+  thrown ball, the HUD row's flash), and what it does not (a call-in). The reason 0.2.0's pages change at any time.
 
 ## Test mod (not in this repository)
 
