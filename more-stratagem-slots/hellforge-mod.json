@@ -2,8 +2,8 @@
   "format": 1,
   "id": "hariyomari.more-stratagem-slots",
   "name": "More Stratagem Slots",
-  "version": "0.1.4",
-  "description": "Allows up to 20 stratagem slots up from the default 4 to be selected in the loadout screen. Q/E or MWHEEL UP/DOWN to switch pages. PLEASE NOTE: You cannot switch pages while a stratagem is being activated! There was an issue with incorrect labels when switching pages, while activating something. You can change this in the settings INI file (`more-stratagem-slots.ini`), but it comes with the aforementioned issue of incorrect labels. It is ON by default.",
+  "version": "0.2.0",
+  "description": "Allows up to 20 stratagem slots up from the default 4 to be selected in the loadout screen. Q/E or MWHEEL UP/DOWN to switch pages. You can switch pages at any time, and to stop pages from switching while a stratagem is being called in/activated, set 'page_lock = on' in the settings INI file (more-stratagem-slots.ini).",
   "url": "https://github.com/hariyomari/more-stratagem-slots",
   "gameplay": true,
   "code": { "dll": "stratagem_slots.dll", "sdk": 13 }

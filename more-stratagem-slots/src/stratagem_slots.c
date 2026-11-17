@@ -10,7 +10,8 @@
  * target slot (screen + 10268) is then set to 4 + k.
  * Pages: the game's in-mission list holds 16 in all (its lists of 16, research/audit-findings.md). Past that, the
  * picks take turns in it a page at a time (Q/E while the list is open); the rest wait in this mod with their uses and
- * cooldowns. See "pages".
+ * cooldowns. See "pages". The page changes at any time: a stratagem in hand stays in the list through the change. See
+ * "the stratagem in hand".
  *
  * game.dll 25480438; research and RVAs in research/README.md ("The loadout card"):
  *   panel P = card + 23416. P + 36544: the 4 slot widgets (0x12A8 each, type at +0x128C). The panel's fields continue
@@ -120,6 +121,20 @@
 #define RVA_STRATAGEMS_READ 0x66D8F1u /* mov rsi, [game + RVA_G_STRATAGEMS] */
 #define RVA_G_STRATAGEMS 0x33266D0u   /* pointer: what RVA_AVAILABLE takes first */
 
+/* Following the stratagem in hand (see "the stratagem in hand"): where the game keeps a list row past the frame */
+#define RVA_HAND_SET 0x6A3560u        /* (_, ball, {type, row, player}): a stratagem goes in hand. Its record (40 bytes,
+                                       * at the in-hand system's +96) gets the type +8, the peer +16 and the row +24;
+                                       * the record's twin (76 bytes, at the system's +80) the type +0, the row +4 and
+                                       * the player's u32 id +8. The row is what RVA_ARMED_QUERY and the input's check
+                                       * (0x66D200) compare a list row with */
+#define RVA_HAND_SET_TWIN 0x6A35E7u   /* imul rsi, r14, 76; add rsi, [rdi + 80] */
+#define RVA_HAND_SET_ROW 0x6A3655u    /* mov rcx, [rdi + 96]; ...; mov eax, [r12 + 4]; mov [rbx + rcx + 24], eax */
+#define RVA_HAND_SET_TYPE 0x6A3682u   /* mov rcx, [rdi + 96]; ...; mov eax, [r12]; mov [rbx + rcx + 8], eax */
+#define RVA_HAND_SET_FIELDS 0x6A36AEu /* movsd xmm0, [r12]; ...; movsd [rsi], xmm0; mov eax, [r12 + 8]; mov [rsi + 8], eax */
+#define RVA_BALL_ENDED 0x66EE10u      /* (_, player u32, {type, row, player}): a thrown stratagem ended without being
+                                       * activated. Reads the type of the list's entry `row`, stamps the time on that
+                                       * entry (+0x28: the HUD row then shows state 6 for 2 s) and sends the row */
+
 static const struct { uint32_t rva; const char* pattern; const char* name; } kCode[] = {
     { RVA_REFRESH, "40 55 56 41 54 41 55 48 8D AC 24 78 F0 FF FF B8 88 10 00 00 E8 ?? ?? ?? ?? 48 2B E0", "refresh" },
     { RVA_BUILD_PANEL, "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC B0", "build panel" },
@@ -204,6 +219,23 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kPa
     { RVA_STRATAGEMS_READ, "48 8B 35 D8 8D CB 02 45 33 F6 3B 15", "stratagem input's system" },
 };
 #define PARK_CODE_COUNT (sizeof kParkCode / sizeof kParkCode[0])
+
+/* The in-hand record's layout, as the game's setter writes it: without it (or without the Eagles' code, which finds the
+ * records) the pages can't follow a stratagem in hand, and are locked while one is being activated instead. */
+static const struct { uint32_t rva; const char* pattern; const char* name; } kHandCode[] = {
+    { RVA_HAND_SET, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 56 41 57 48 83 EC 20 48 8B 3D",
+      "stratagem in hand" },
+    { RVA_HAND_SET_TWIN, "49 6B F6 4C 48 03 77 50 E8", "stratagem in hand's twin record" },
+    { RVA_HAND_SET_ROW, "48 8B 4F 60 BA ?? ?? ?? ?? 41 8B 44 24 04 89 44 0B 18", "stratagem in hand's row" },
+    { RVA_HAND_SET_TYPE, "48 8B 4F 60 BA ?? ?? ?? ?? 41 8B 04 24 89 44 0B 08", "stratagem in hand's type" },
+    { RVA_HAND_SET_FIELDS, "F2 41 0F 10 04 24 48 8B 5C 24 40 48 8B 6C 24 48 48 8B 7C 24 58 F2 0F 11 06 41 8B 44 24 08 89 46 "
+      "08", "stratagem in hand's twin fields" },
+};
+#define HAND_CODE_COUNT (sizeof kHandCode / sizeof kHandCode[0])
+
+/* Without it a thrown stratagem that ends without being activated, after a page change, marks the wrong row for 2 s. */
+static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B F0 4C 8B 15 ?? ?? ?? ?? 0F 84 8C 01 00 00 45 "
+                                     "8B 4A 60 45 8B 5A 68";
 
 /* The panel */
 #define PANEL_SLOTS 36544u       /* the game's 4 slot widgets */
@@ -346,6 +378,7 @@ typedef void (*CooldownSystemsFn)(uint64_t peer, uint32_t slot, uint8_t set_star
 typedef uint8_t (*EaglesSpentFn)(uint8_t* unused, uint32_t player);
 typedef uint8_t (*EaglesUsedFn)(uint8_t* unused, uint8_t* list);
 typedef uint8_t (*AvailableFn)(const uint8_t* stratagems, const uint8_t* list, uint32_t row);
+typedef void (*BallEndedFn)(uint64_t unused, uint32_t player, uint32_t* ball);
 
 /* ---- state ------------------------------------------------------------------------------------------------------- */
 
@@ -414,7 +447,12 @@ static int g_park_ok;             /* parking's code matched (and the label's hoo
 static int g_activating_local;    /* inside the game's activation of a local player's stratagem */
 static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
-static int g_page_hold = 1;       /* page_hold: no page change while a stratagem of the page is called in or in hand */
+static int g_wheel_invert;        /* page_wheel_invert: wheel up is the previous page, not the next */
+static int g_page_lock;           /* page_lock: no page change while a stratagem of the page is called in or in hand */
+static int g_follow_ok;           /* the in-hand record's code matched (and the Eagles' is there): the pages can follow
+                                   * a stratagem in hand */
+static BallEndedFn g_ball_ended;
+static uint32_t g_local_player;   /* the local player's u32 id, as the in-hand record's twin holds it (0: not seen yet) */
 static int g_page_added = 1;      /* page_added: loadout stratagems other mods add to the list go in the pages too */
 static int g_page_rearm = 1;      /* page_rearm: Eagle Rearm shows on every page, not only on those that hold an Eagle */
 static volatile LONG64 g_list_seen; /* GetTickCount64 when the list's update last saw it open */
@@ -434,9 +472,9 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PROFILE, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE,
-       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_KINDS };
+       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 200, 24, 6, 40, 200, 12, 120 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 500, 24, 6, 40, 600, 12, 120, 600, 200 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -1040,7 +1078,8 @@ static void TypeList(const uint8_t* record, uint32_t first, uint32_t last, char*
  * Rearm, whatever it adds during the mission) stay in it, and the picks take turns in it a page at a time (slots 1..k,
  * then k+1..2k, ...; k = 16 - the game's entries at ready-up). A pick's uses and cooldown live in its own entry, so a
  * pick out of the list keeps them here (its cooldown is an end time: it runs on). The page changes with the keys while
- * the list is open, or by itself when a stratagem in hand is on another page. */
+ * the list is open. A stratagem in hand stays in the list through a change (see "the stratagem in hand"); only when it
+ * finds no row there does the page change by itself, to the one that holds it. */
 #define MAX_ITEMS (MAX_SLOTS + GAME_LIST_MAX)
 typedef struct
 {
@@ -1056,6 +1095,9 @@ typedef struct
     uint8_t state[MAX_ITEMS][LOADOUT_SLOT]; /* its entry now (for the items in the list: as of the last page change) */
     uint8_t gone[MAX_ITEMS];      /* left the list during the mission (used up): not put back */
     uint8_t shown[MAX_ITEMS];     /* put in the list by the last page change (or at ready-up) */
+    uint8_t held[MAX_ITEMS];      /* ... though not of the page shown: in hand, landing or still being called in (see
+                                   * "the stratagem in hand") */
+    uint64_t held_until[MAX_ITEMS]; /* GetTickCount64: a held item stays at least until then after it left the hand */
     /* parking: the game's entries taken out of the record at ready-up, each in the list only while it can be used */
     uint32_t parks;
     uint8_t park_fresh[GAME_LIST_MAX][LOADOUT_SLOT]; /* its entry at ready-up */
@@ -1178,13 +1220,14 @@ static int ParkPending(void)
  * since (by the mission, or by another mod such as P.S.S.). With page_added, an added loadout stratagem is taken in as
  * an item after the picks, so it is in the pages like them; anything else stays on every page. A page is as many items
  * as fit beside the entries that stay, less LIST_SPARE rows left free for the next addition, so the pages are counted
- * again from the list as it is now. Returns the items in the list. */
+ * again from the list as it is now. Returns the page's items in the list (not those held from another page, which are
+ * in the rows the page leaves free). */
 static uint32_t FitPages(const uint8_t* list)
 {
     uint32_t n = Get32(list + LOADOUT_COUNT);
     if (n > GAME_LIST_MAX || g_pager.per_page == 0) return 0;
     uint8_t taken[GAME_LIST_MAX] = { 0 };
-    uint32_t ours = 0;
+    uint32_t ours = 0, held = 0;
     for (uint32_t k = 0; k < g_pager.items; k++)
     {
         if (!g_pager.shown[k] || g_pager.gone[k]) continue;
@@ -1193,6 +1236,7 @@ static uint32_t FitPages(const uint8_t* list)
         if (i == n) continue;
         taken[i] = 1;
         ours++;
+        if (g_pager.held[k]) held++;
     }
     /* the parked entries in the list are neither the picks' nor entries that stay; those the game would show now
      * get rows whether they are in yet or not */
@@ -1246,7 +1290,7 @@ static uint32_t FitPages(const uint8_t* list)
         if (g_pager.page >= pages) g_pager.page = pages - 1;
     }
     if (pages >= 2) g_pager.paged = 1;
-    return ours;
+    return ours - held;
 }
 
 /* A list entry's fields past type (+0) and uses (+4): u64 times on the game's clock (microseconds). */
@@ -1300,11 +1344,100 @@ static int ArmedRow(const uint8_t** record)
     return -1;
 }
 
+/* ---- the stratagem in hand --------------------------------------------------------------------------------------- */
+
+/* What the game ties to a list row past the frame it reads it in (research/page-change-findings.md):
+ *   in hand: the in-hand record names the row (RVA_HAND_SET). The HUD shows that row as the one in hand and the input
+ *     keeps it from being taken again, whatever entry is in it;
+ *   thrown: the ball carries {type, row} to its activation (RVA_ACTIVATE) or to its end without one (RVA_BALL_ENDED);
+ *   called in: nothing. The uses, the cooldown and the call-in's end are in the entry and move with it, and the HUD
+ *     row works out "being called in" from its entry every frame. It only holds that state for 1.5 s after the
+ *     call-in's end (row + ROW_FLASH), whatever entry it shows then.
+ * So a page change needs no holding back (page_lock = off): the entry in hand stays in the list, in a row the page
+ * leaves free (it is "held"), and the record is pointed at the row it is in now; the ball's row is pointed at its
+ * type's entry when the game uses it, the entry put in the list again first if it is out; and the rows whose entry
+ * changed lose their flash. A held entry stays until it has landed and been called in, then leaves the list again.
+ * With page_lock = on none of this runs: a change waits, as it did before 0.2.0. */
+#define ARMED_TYPE 8u
+#define ARMED_PEER 16u
+#define ARMED_ROW 24u
+#define ARMED_TWINS 80u
+#define TWIN_STRIDE 76u
+#define TWIN_ROW 4u
+#define TWIN_PLAYER 8u
+#define HELD_GRACE_MS 6000u      /* a held entry stays this long after it left the hand: the throw's flight */
+#define FLASH_LIVE_MS 300u       /* how long the HUD lists' updates clear the flash of the rows that changed */
+#define HAND_SETTLE_MS 200u      /* an in-hand record naming a row that holds another entry is believed after this */
+
+typedef struct { uint8_t* record; uint8_t* twin; uint32_t type, row; } Hand;
+
+static int Following(void) { return !g_page_lock && g_follow_ok; }
+
+/* The local player's in-hand record: 1 when a stratagem is in hand. */
+static int HandOf(Hand* hand)
+{
+    memset(hand, 0, sizeof *hand);
+    if (!g_follow_ok) return 0;
+    uint8_t* system = *(uint8_t* const*)(game + RVA_G_ARMED);
+    if (system == NULL) return 0;
+    uint32_t n = Get32(system + ARMED_COUNT);
+    uint8_t* records = *(uint8_t* const*)(system + ARMED_RECORDS);
+    uint8_t* twins = *(uint8_t* const*)(system + ARMED_TWINS);
+    uint64_t peer = LocalPeer();
+    if (records == NULL || peer == 0 || n > 1024) return 0;
+    for (uint32_t i = 0; i < n; i++)
+    {
+        uint8_t* r = records + (size_t)i * ARMED_STRIDE;
+        uint32_t type = Get32(r + ARMED_TYPE), row = Get32(r + ARMED_ROW);
+        if (Get64(r + ARMED_PEER) != peer || r[1] != 0 || row >= GAME_LIST_MAX || type == 0) continue;
+        hand->record = r;
+        hand->type = type;
+        hand->row = row;
+        uint8_t* twin = twins != NULL ? twins + (size_t)i * TWIN_STRIDE : NULL;
+        if (twin != NULL && Get32(twin) == type)
+        {
+            hand->twin = twin;
+            g_local_player = Get32(twin + TWIN_PLAYER);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* The last write to the in-hand record, looked at again an update later (does the game keep it?). */
+static struct { int pending; uint32_t type, row; int twin; } g_hand_moved;
+
+/* Points the in-hand record at row `to`, where its entry is now. Only the record this mod expects: the local player's,
+ * of that type, naming `from`. The twin (what the thrown ball may take its row from) follows when it names `from`
+ * too; either way the ball's row is looked up again by type when the game uses it. */
+static int HandMove(uint32_t type, uint32_t from, uint32_t to, uint32_t count, const char* why)
+{
+    Hand hand;
+    if (to >= count || to >= GAME_LIST_MAX || !HandOf(&hand) || hand.type != type || hand.row != from) return 0;
+    Put32(hand.record + ARMED_ROW, to);
+    int twin = hand.twin != NULL && Get32(hand.twin + TWIN_ROW) == from;
+    if (twin) Put32(hand.twin + TWIN_ROW, to);
+    g_hand_moved.pending = 1;
+    g_hand_moved.type = type;
+    g_hand_moved.row = to;
+    g_hand_moved.twin = twin;
+    LOG_ONCE(LOG_HAND, "in hand: type %u's record now names row %u, where its entry is (it named row %u; %s)%s", type,
+             to + 1, from + 1, why, twin ? "" : "; its twin was left as it is");
+    return 1;
+}
+
+/* The rows whose entry changed: the HUD lists' updates clear their flash and linger for a moment (SettleRows). */
+static volatile LONG g_flash_rows;
+static volatile LONG64 g_flash_until; /* GetTickCount64 */
+
+static int g_bring = -1;          /* an item the change under way puts in the list whatever the page: its stratagem is
+                                   * about to be used by the game (landing, or its end without an activation) */
+
 /* Puts page `to` in the list in place of the current one. The current page's picks are found in the list by type (in
- * order) and kept here; the rest of the list (the game's) stays as it is, and the new page's picks go after it.
- * Unless forced, a change that would move or replace an entry being called in is held back (1: changed,
- * 0: not possible, -1: held back): the HUD shows a call-in by its row, so after a change that row would show the new
- * page's stratagem as the one coming in. */
+ * order) and kept here; the rest of the list (the game's) stays as it is, and the new page's picks go after it, then
+ * the entries held from other pages. 1: changed, 0: not possible, -1: held back.
+ * Following a stratagem in hand, only a change that has no free row for the entry in hand is held back. Otherwise
+ * (page_lock = on) a change that would move or replace an entry in hand or being called in is, unless forced. */
 static int SwitchPage(uint32_t to, const char* why, int force)
 {
     uint8_t* list = LocalList();
@@ -1316,8 +1449,16 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     FitPages(list);
     if (to >= g_pager.pages) return 0;
 
+    int follow = Following();
+    ULONGLONG ms = GetTickCount64();
+    uint64_t now = Now();
+    Hand hand = { 0 };
+    /* in hand, and its record names the row its entry is in (the update's FollowHand sees to it when not) */
+    int in_hand = follow && HandOf(&hand) && hand.row < n && EntryType(list, hand.row) == hand.type;
+
     uint8_t keep[GAME_LIST_MAX][LOADOUT_SLOT];
-    uint32_t kept = 0, insert_at;
+    int keep_src[GAME_LIST_MAX]; /* each one's row in the list now */
+    uint32_t kept = 0;
     uint8_t taken[GAME_LIST_MAX] = { 0 };
     uint8_t placed[MAX_ITEMS] = { 0 }; /* the items this change puts in the list */
     int found[MAX_ITEMS]; /* the items in the list now: where each is, or -1 (used up) */
@@ -1336,87 +1477,161 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     for (uint32_t i = 0; i < n; i++)
     {
         if (taken[i]) continue;
+        keep_src[kept] = (int)i;
         memcpy(keep[kept++], list + LOADOUT_SLOTS + i * LOADOUT_SLOT, LOADOUT_SLOT);
     }
-    /* the parked entries the game would show now: after the page, so that one coming or going moves no pick's row */
+    /* whose entry the in-hand record names: a pick's, or a parked entry's */
+    int hand_item = -1, hand_park = -1;
+    if (in_hand)
+    {
+        for (uint32_t k = 0; k < g_pager.items; k++)
+            if (found[k] == (int)hand.row) hand_item = (int)k;
+        for (uint32_t c = 0; c < g_pager.parks; c++)
+            if (park_row[c] == (int)hand.row) hand_park = (int)c;
+    }
+    /* the parked entries the game would show now: after the page, so that one coming or going moves no pick's row.
+     * One in hand stays until it is thrown, though the game would not show it any more */
     uint8_t tail[GAME_LIST_MAX][LOADOUT_SLOT];
+    int tail_src[GAME_LIST_MAX];
     uint8_t in_tail[GAME_LIST_MAX] = { 0 };
     uint32_t tails = 0;
     for (uint32_t c = 0; c < g_pager.parks && kept + tails < GAME_LIST_MAX; c++)
     {
-        if (g_pager.park_gone[c] || !g_pager.park_want[c] || ParkUsedUp(c, park_row, n)) continue;
+        if (g_pager.park_gone[c] || (!g_pager.park_want[c] && (int)c != hand_park) || ParkUsedUp(c, park_row, n)) continue;
+        tail_src[tails] = park_row[c];
         memcpy(tail[tails++], park_row[c] >= 0 ? list + LOADOUT_SLOTS + (uint32_t)park_row[c] * LOADOUT_SLOT :
                g_pager.park_state[c], LOADOUT_SLOT);
         in_tail[c] = 1;
     }
-    /* The page goes after every entry that stays. The HUD draws granted entries (the mission's, another mod's) before
-     * the picks, in the list's order: with the page in front of the game's trailing entries (an objective's stratagem,
-     * Eagle Rearm), an added stratagem on the page came before them and they moved from page to page. */
-    insert_at = kept;
 
+    /* The items that go in the list, by what puts them there: 1 the page, 2 in hand, 3 asked for (g_bring), 4 held by
+     * an earlier change and not done yet (still being called in, or just thrown). */
+    uint8_t want[MAX_ITEMS] = { 0 };
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        /* a pick that was in the list and is not there any more was used up. Not when the list was full: then an entry
+         * appended since has its row (the game's appends write over row 16), and it goes back in from its state here */
+        if (g_pager.gone[k] || (g_pager.shown[k] && found[k] < 0 && n < GAME_LIST_MAX)) continue;
+        if (k >= PageFirst(to) && k < PageEnd(to)) want[k] = 1;
+        else if (!follow) continue;
+        else if ((int)k == hand_item) want[k] = 2;
+        else if ((int)k == g_bring) want[k] = 3;
+        else if (g_pager.held[k] && found[k] >= 0 &&
+                 (CallingIn(list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT, now) || ms < g_pager.held_until[k]))
+            want[k] = 4;
+    }
+
+    /* The game's entries first, as they are: they always stay. Then the page, after every entry that stays: the HUD
+     * draws granted entries (the mission's, another mod's) before the picks, in the list's order, so with the page in
+     * front of the game's trailing entries (an objective's stratagem, Eagle Rearm) an added stratagem on the page came
+     * before them and they moved from page to page. Then the held entries, in the rows the page leaves free, and the
+     * parked ones. */
     uint8_t out[GAME_LIST_MAX][LOADOUT_SLOT];
-    uint32_t count = 0, put = 0, room = GAME_LIST_MAX - kept - tails; /* the game's entries always stay */
-    for (uint32_t i = 0; i <= kept; i++)
+    int src[GAME_LIST_MAX]; /* each one's row in the list now, or -1 */
+    uint8_t held[MAX_ITEMS] = { 0 };
+    uint32_t count = 0, put = 0, held_in = 0, room = GAME_LIST_MAX - kept - tails;
+    int no_row = 0; /* the entry in hand found no row */
+    for (uint32_t i = 0; i < kept; i++)
     {
-        if (i == insert_at)
-            for (uint32_t k = PageFirst(to); k < PageEnd(to) && put < room; k++)
-                if (!g_pager.gone[k] && (!g_pager.shown[k] || found[k] >= 0))
-                {
-                    /* a pick in the list comes from the list (its state here is as of the last change) */
-                    const uint8_t* from = g_pager.shown[k] ?
-                        list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT : g_pager.state[k];
-                    memcpy(out[count++], from, LOADOUT_SLOT);
-                    placed[k] = 1;
-                    put++;
-                }
-        if (i < kept && count < GAME_LIST_MAX) memcpy(out[count++], keep[i], LOADOUT_SLOT);
+        src[count] = keep_src[i];
+        memcpy(out[count++], keep[i], LOADOUT_SLOT);
     }
-    for (uint32_t t = 0; t < tails && count < GAME_LIST_MAX; t++) memcpy(out[count++], tail[t], LOADOUT_SLOT);
+    for (uint8_t by = 1; by <= 4; by++)
+        for (uint32_t k = 0; k < g_pager.items; k++)
+        {
+            if (want[k] != by) continue;
+            if (put >= room)
+            {
+                if (by == 2) no_row = 1;
+                continue;
+            }
+            /* a pick in the list comes from the list (its state here is as of the last change) */
+            src[count] = found[k];
+            memcpy(out[count++], found[k] >= 0 ? list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT : g_pager.state[k],
+                   LOADOUT_SLOT);
+            placed[k] = 1;
+            put++;
+            if (by > 1) { held[k] = 1; held_in++; }
+        }
+    for (uint32_t t = 0; t < tails && count < GAME_LIST_MAX; t++)
+    {
+        src[count] = tail_src[t];
+        memcpy(out[count++], tail[t], LOADOUT_SLOT);
+    }
 
-    /* the rows the game ties to a stratagem by their index: being called in, or named by an in-hand record (which is
-     * not waited for longer than ARMED_HOLD_MS, in case it outlives the throw) */
-    static ULONGLONG armed_since;
-    static const uint8_t* stale;  /* a record not waited for any more, while it names the same row */
-    static int stale_row = -1;
-    const uint8_t* record = NULL;
-    uint64_t now = Now();
-    /* page_hold = off: the player takes the wrong name on that row (not for a change the player did not ask for) */
-    if (!g_page_hold && !g_refitting) force = 1;
-    int armed = force ? -1 : ArmedRow(&record);
-    if (!force && record == NULL) stale = NULL;
-    if (armed >= 0 && record == stale && armed == stale_row) armed = -1;
-    else if (armed >= 0 && armed_since != 0 && GetTickCount64() - armed_since > ARMED_HOLD_MS)
+    if (follow)
     {
-        LOG_ONCE(LOG_PAGE, "page change (%s): row %d is still named in hand after %u ms; not waited for", why, armed + 1,
-                 ARMED_HOLD_MS);
-        stale = record;
-        stale_row = armed;
-        armed = -1;
+        if (no_row && !force)
+        {
+            if (!g_refitting)
+                LOG_ONCE(LOG_PAGE, "page change (%s) held back: type %u is in hand and page %u leaves no free row for it "
+                         "(the game's %u, %u parked in, %u of the page)", why, hand.type, to + 1, kept, tails, put);
+            return -1;
+        }
     }
-    for (uint32_t i = 0; i < n && !force; i++)
+    else
     {
-        const uint8_t* e = list + LOADOUT_SLOTS + i * LOADOUT_SLOT;
-        int calling = CallingIn(e, now);
-        if ((!calling && (int)i != armed) || (i < count && Get32(out[i]) == Get32(e))) continue;
-        if (calling) armed_since = 0;
-        else if (armed_since == 0) armed_since = GetTickCount64();
-        /* (the refit asks again every update: not logged) */
-        if (!g_refitting)
-            LOG_ONCE(LOG_PAGE, "page change (%s) held back: type %u in row %u is %s (call-in ends in %d ms)", why,
-                     Get32(e), i + 1, calling ? "being called in" : "in hand",
-                     (int)(((int64_t)Get64(e + ENTRY_CALL_END) - (int64_t)now) / 1000));
-        return -1;
+        /* the rows the game ties to a stratagem by their index: named by an in-hand record (which is not waited for
+         * longer than ARMED_HOLD_MS, in case it outlives the throw), and those being called in, whose HUD row holds its
+         * state for 1.5 s after */
+        static ULONGLONG armed_since;
+        static const uint8_t* stale;  /* a record not waited for any more, while it names the same row */
+        static int stale_row = -1;
+        const uint8_t* record = NULL;
+        int armed = force ? -1 : ArmedRow(&record);
+        if (!force && record == NULL) stale = NULL;
+        if (armed >= 0 && record == stale && armed == stale_row) armed = -1;
+        else if (armed >= 0 && armed_since != 0 && GetTickCount64() - armed_since > ARMED_HOLD_MS)
+        {
+            LOG_ONCE(LOG_PAGE, "page change (%s): row %d is still named in hand after %u ms; not waited for", why,
+                     armed + 1, ARMED_HOLD_MS);
+            stale = record;
+            stale_row = armed;
+            armed = -1;
+        }
+        for (uint32_t i = 0; i < n && !force; i++)
+        {
+            const uint8_t* e = list + LOADOUT_SLOTS + i * LOADOUT_SLOT;
+            int calling = CallingIn(e, now);
+            if ((!calling && (int)i != armed) || (i < count && Get32(out[i]) == Get32(e))) continue;
+            if (calling) armed_since = 0;
+            else if (armed_since == 0) armed_since = GetTickCount64();
+            /* (the refit asks again every update: not logged) */
+            if (!g_refitting)
+                LOG_ONCE(LOG_PAGE, "page change (%s) held back: type %u in row %u is %s (call-in ends in %d ms)", why,
+                         Get32(e), i + 1, calling ? "being called in" : "in hand",
+                         (int)(((int64_t)Get64(e + ENTRY_CALL_END) - (int64_t)now) / 1000));
+            return -1;
+        }
+        armed_since = 0;
     }
-    armed_since = 0;
 
-    /* only a pick that was in the list and is not there any more was used up; one that found no room was never in it */
+    uint32_t old_type[GAME_LIST_MAX];
+    for (uint32_t i = 0; i < n; i++) old_type[i] = EntryType(list, i);
     for (uint32_t k = 0; k < g_pager.items; k++)
     {
         if (!g_pager.shown[k] || g_pager.gone[k]) continue;
-        if (found[k] < 0) { g_pager.gone[k] = 1; continue; }
+        if (found[k] < 0)
+        {
+            if (n < GAME_LIST_MAX) g_pager.gone[k] = 1; /* used up */
+            else LOG_ONCE(LOG_PAGE, "pages: type %u lost its row in a full list; kept as it was at the last change",
+                          Get32(g_pager.state[k]));
+            continue;
+        }
         memcpy(g_pager.state[k], list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT, LOADOUT_SLOT);
     }
     memcpy(g_pager.shown, placed, sizeof g_pager.shown);
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        if (held[k] && want[k] != 4) g_pager.held_until[k] = ms + HELD_GRACE_MS; /* in hand, or about to be used */
+        if (held[k] && !g_pager.held[k])
+            LOG_ONCE(LOG_HAND, "held: type %u of page %u stays in the list on page %u (%s)", Get32(g_pager.state[k]),
+                     g_pager.per_page != 0 ? k / g_pager.per_page + 1 : 0, to + 1,
+                     want[k] == 2 ? "in hand" : "about to be used");
+        if (!held[k] && g_pager.held[k] && !placed[k])
+            LOG_ONCE(LOG_HAND, "held: type %u is done and out of the list again", Get32(g_pager.state[k]));
+    }
+    memcpy(g_pager.held, held, sizeof g_pager.held);
     /* the parked entries, the same way: one in the list keeps its state from there, in or out */
     uint32_t parked_now = 0;
     for (uint32_t c = 0; c < g_pager.parks; c++)
@@ -1445,9 +1660,29 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     if (count < n) memset(slots + count * LOADOUT_SLOT, 0, (size_t)(n - count) * LOADOUT_SLOT);
     Put32(list + LOADOUT_COUNT, count);
     g_pager.page = to;
+
+    /* the rows that show another entry now must not keep the flash of the one before */
+    LONG changed = 0;
+    for (uint32_t i = 0; i < GAME_LIST_MAX; i++)
+        if ((i < count ? Get32(out[i]) : 0) != (i < n ? old_type[i] : 0)) changed |= (LONG)1 << i;
+    if (changed != 0)
+    {
+        InterlockedExchange64(&g_flash_until, (LONG64)(ms + FLASH_LIVE_MS));
+        InterlockedOr(&g_flash_rows, changed);
+    }
+    /* the in-hand record follows its entry */
+    if (in_hand)
+    {
+        uint32_t j = 0;
+        while (j < count && src[j] != (int)hand.row) j++;
+        if (j == count)
+            LOG_ONCE(LOG_HAND, "in hand: type %u's entry (row %u) is out of the list after this change (%s)", hand.type,
+                     hand.row + 1, why);
+        else if (j != hand.row) HandMove(hand.type, hand.row, j, count, why);
+    }
     if (g_park_refit) return 1; /* the same page, around a parked entry: its own lines above */
-    LOG_ONCE(LOG_PAGE, "page %u of %u (%s): %u picks in, the game's %u kept, %u parked, list %u -> %u", to + 1,
-             g_pager.pages, why, put, kept, parked_now, n, count);
+    LOG_ONCE(LOG_PAGE, "page %u of %u (%s): %u picks in (%u held from other pages), the game's %u kept, %u parked, list "
+             "%u -> %u", to + 1, g_pager.pages, why, put, held_in, kept, parked_now, n, count);
     if (now != 0) g_view_until = now + 8000000ull;
     return 1;
 }
@@ -1634,6 +1869,8 @@ static uint64_t Reset(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t g
             g_pager.pages = (g_pager.picks + g_pager.per_page - 1) / g_pager.per_page;
         }
         for (uint32_t k = 0; k < MAX_ITEMS; k++) g_pager.shown[k] = k < g_pager.in_record;
+        memset(g_pager.held, 0, sizeof g_pager.held);
+        memset(g_pager.held_until, 0, sizeof g_pager.held_until);
         /* the parked entries are not in the record either: all out again, as at ready-up */
         memcpy(g_pager.park_state, g_pager.park_fresh, sizeof g_pager.park_state);
         memset(g_pager.park_in, 0, sizeof g_pager.park_in);
@@ -1698,8 +1935,19 @@ static void LoadAssets(uint8_t* entry, uint32_t stage, uint8_t ack, uint64_t by,
              count - n);
 }
 
-/* A stratagem in hand names its slot in the list as it was when its code went in. After a page change that slot may
- * hold another: point it at its type's entry, first changing to the page that holds it if it is not in the list. */
+/* Puts item k in the list as a held entry, the page as it is: 1 when it is there after. */
+static int Bring(uint32_t k, const char* why)
+{
+    if (!Following()) return 0;
+    g_bring = (int)k;
+    int changed = SwitchPage(g_pager.page, why, 1);
+    g_bring = -1;
+    return changed > 0 && g_pager.shown[k];
+}
+
+/* A thrown stratagem names its slot in the list as it was when its code went in. After a page change that slot may
+ * hold another: point it at its type's entry, first putting that entry in the list if it is out (or, when no row is
+ * free or the pages are locked, changing to the page that holds it). */
 static uint64_t CallActivate(uint64_t unused, uint64_t peer, uint32_t* armed, void* where, uint8_t flag)
 {
     int was = g_activating_local;
@@ -1716,7 +1964,7 @@ static uint64_t Activate(uint64_t unused, uint64_t peer, uint32_t* armed, void* 
     uint32_t type = armed[0], slot = armed[1], n = Get32(list + LOADOUT_COUNT);
     const uint8_t* record;
     int in_hand = ArmedRow(&record);
-    LOG_ONCE(LOG_ROWS, "activation: type %u, slot %u (now type %u there), page %u, in-hand record's row %d", type,
+    LOG_ONCE(LOG_HAND, "activation: type %u, slot %u (now type %u there), page %u, in-hand record's row %d", type,
              slot + 1, slot < n && slot < GAME_LIST_MAX ? EntryType(list, slot) : 0, g_pager.page + 1, in_hand + 1);
     if (n > GAME_LIST_MAX || (slot < n && EntryType(list, slot) == type)) return CallActivate(unused, peer, armed, where, flag);
 
@@ -1727,7 +1975,7 @@ static uint64_t Activate(uint64_t unused, uint64_t peer, uint32_t* armed, void* 
         for (uint32_t k = 0; k < g_pager.items; k++)
             if (!g_pager.gone[k] && Get32(g_pager.state[k]) == type && !g_pager.shown[k])
             {
-                if (SwitchPage(k / g_pager.per_page, "a stratagem in hand", 1) > 0)
+                if (Bring(k, "a stratagem landing") || SwitchPage(k / g_pager.per_page, "a stratagem in hand", 1) > 0)
                 {
                     n = Get32(list + LOADOUT_COUNT);
                     for (i = 0; i < n && EntryType(list, i) != type; i++) {}
@@ -1749,14 +1997,58 @@ static uint64_t Activate(uint64_t unused, uint64_t peer, uint32_t* armed, void* 
             }
     if (i >= n)
     {
-        LOG_ONCE(LOG_PAGE, "activation: type %u (slot %u) is in no page; left to the game", type, slot + 1);
+        LOG_ONCE(LOG_HAND, "activation: type %u (slot %u) is in no page; left to the game", type, slot + 1);
         return CallActivate(unused, peer, armed, where, flag);
     }
-    LOG_ONCE(LOG_PAGE, "activation: type %u was slot %u, now %u", type, slot + 1, i + 1);
+    LOG_ONCE(LOG_HAND, "activation: type %u was slot %u, now %u", type, slot + 1, i + 1);
     armed[1] = i;
     uint64_t result = CallActivate(unused, peer, armed, where, flag);
     armed[1] = slot;
     return result;
+}
+
+/* The same for a thrown stratagem that ends without being activated: the game stamps the time on the entry in the
+ * ball's slot and the HUD row shows it for 2 s. The local player's ball is told by the player's u32 id, known from the
+ * in-hand record's twin once a stratagem has been in hand (any ball that ends was). */
+static void BallEnded(uint64_t unused, uint32_t player, uint32_t* ball)
+{
+    uint8_t* list = g_pager.active && ball != NULL && g_local_player != 0 && player == g_local_player ? LocalList() : NULL;
+    uint32_t n = list != NULL ? Get32(list + LOADOUT_COUNT) : 0;
+    if (list == NULL || n > GAME_LIST_MAX)
+    {
+        g_ball_ended(unused, player, ball);
+        return;
+    }
+    uint32_t type = ball[0], slot = ball[1], i = 0;
+    LOG_ONCE(LOG_HAND, "a thrown stratagem ended without an activation: type %u, slot %u (now type %u there), page %u",
+             type, slot + 1, slot < n ? EntryType(list, slot) : 0, g_pager.page + 1);
+    if (slot < n && EntryType(list, slot) == type)
+    {
+        g_ball_ended(unused, player, ball);
+        return;
+    }
+    while (i < n && EntryType(list, i) != type) i++;
+    if (i == n)
+        for (uint32_t k = 0; k < g_pager.items; k++)
+            if (!g_pager.gone[k] && Get32(g_pager.state[k]) == type && !g_pager.shown[k])
+            {
+                if (Bring(k, "a thrown stratagem that ended"))
+                {
+                    n = Get32(list + LOADOUT_COUNT);
+                    for (i = 0; i < n && EntryType(list, i) != type; i++) {}
+                }
+                break;
+            }
+    if (i >= n)
+    {
+        LOG_ONCE(LOG_HAND, "a thrown stratagem ended: type %u (slot %u) is not in the list; left to the game", type, slot + 1);
+        g_ball_ended(unused, player, ball);
+        return;
+    }
+    LOG_ONCE(LOG_HAND, "a thrown stratagem ended: type %u was slot %u, now %u", type, slot + 1, i + 1);
+    ball[1] = i;
+    g_ball_ended(unused, player, ball);
+    ball[1] = slot;
 }
 
 static void ListOpen(uint8_t* hud, uint8_t open)
@@ -1837,7 +2129,7 @@ static void Cooldown(uint8_t* history, uint64_t peer, uint32_t slot, uint8_t set
     if (list != NULL && slot < Get32(list + LOADOUT_COUNT) && slot < GAME_LIST_MAX)
     {
         const uint8_t* e = list + LOADOUT_SLOTS + slot * LOADOUT_SLOT;
-        LOG_ONCE(LOG_ROWS, "used: type %u in row %u (page %u), its call-in ends in %d ms", Get32(e), slot + 1,
+        LOG_ONCE(LOG_HAND, "used: type %u in row %u (page %u), its call-in ends in %d ms", Get32(e), slot + 1,
                  g_pager.page + 1, (int)(((int64_t)Get64(e + ENTRY_CALL_END) - (int64_t)Now()) / 1000));
     }
     MirrorEagles(slot);
@@ -1998,8 +2290,9 @@ static void LogRows(const uint8_t* list)
     if (first)
     {
         const uint8_t* record;
-        LOG_ONCE(LOG_ROWS, "HUD after the change: in-hand record's row %d, list +227100 %d, +227104 %d", ArmedRow(&record) + 1,
-                 (int)Get32(list + 227100u), (int)Get32(list + 227104u));
+        int armed = ArmedRow(&record);
+        LOG_ONCE(LOG_ROWS, "HUD after the change: in-hand record's row %d (type %u), list +227100 %d, +227104 %d", armed + 1,
+                 record != NULL ? Get32(record + ARMED_TYPE) : 0, (int)Get32(list + 227100u), (int)Get32(list + 227104u));
     }
     for (uint32_t r = 0; r < HUD_ROWS && r < count; r++)
     {
@@ -2047,9 +2340,53 @@ static void ParkAsk(uint32_t shown)
             g_pager.park_want[c] = g_available(stratagems, copy, c) != 0;
 }
 
+/* What a HUD row keeps of the entry it showed before, after a change of the list:
+ *   its flash (row + ROW_FLASH): "being called in" held for 1.5 s after the entry's call-in ended. While it is above 0,
+ *     HudStratagemRow_Update keeps the row's state and only counts it down, whatever entry the row shows by then. A
+ *     row that had no entry also starts one, for an entry called in at any time before (seen in game, 0.2.0);
+ *   its linger (row + ROW_LINGER): the row stays shown with the list closed for 2 or 3 s after its state changed from
+ *     "on cooldown" to "ready", or from "in hand" or "being called in" to another. An entry on cooldown replaced by
+ *     one that is ready looks like that change: the new entry showed by itself, with its code, after the list closed.
+ * The rows that show another entry lose both, before and after the list's update: every list that updates within
+ * FLASH_LIVE_MS of the change (so not only the first one to come by, and for the updates the states settle in). */
+#define ROW_LINGER 14080u         /* float seconds */
+static void SettleRows(uint8_t* list)
+{
+    LONG rows = g_flash_rows;
+    if (rows == 0 || list == NULL) return;
+    if (GetTickCount64() > (ULONGLONG)g_flash_until)
+    {
+        InterlockedAnd(&g_flash_rows, ~rows);
+        return;
+    }
+    for (uint32_t r = 0; r < HUD_ROWS; r++)
+    {
+        uint8_t* row = list + HUD_ROW0 + r * ROW_STRIDE;
+        uint32_t entry = Get32(row + ROW_INDEX);
+        float flash, linger;
+        memcpy(&flash, row + ROW_FLASH, 4);
+        memcpy(&linger, row + ROW_LINGER, 4);
+        if (entry >= GAME_LIST_MAX || ((rows >> entry) & 1) == 0) continue;
+        if (flash > 0.0f)
+        {
+            LOG_ONCE(LOG_HUD, "HUD row %u (entry %u, state %u): its flash of %d ms cleared after the change", r + 1,
+                     entry + 1, Get32(row + ROW_STATE), (int)(flash * 1000.0f));
+            memset(row + ROW_FLASH, 0, 4);
+        }
+        if (linger > 0.0f)
+        {
+            LOG_ONCE(LOG_HUD, "HUD row %u (entry %u, state %u): its linger of %d ms cleared after the change", r + 1,
+                     entry + 1, Get32(row + ROW_STATE), (int)(linger * 1000.0f));
+            memset(row + ROW_LINGER, 0, 4);
+        }
+    }
+}
+
 static void ListUpdate(uint8_t* list, float a, uint32_t b, float c)
 {
+    SettleRows(list);
     g_list_update(list, a, b, c);
+    SettleRows(list);
     ParkAsk(b);
     if (list != NULL && list[HUD_LIST_OPEN] != 0) InterlockedExchange64(&g_list_seen, (LONG64)GetTickCount64());
     if (list != NULL && g_pager.active) LogRows(list);
@@ -2093,8 +2430,8 @@ static int GameFocused(void)
 
 /* GetAsyncKeyState has no wheel, and the mod has no way into the game's own input on its update, so a low-level mouse
  * hook on a thread of the mod's own sees the wheel. While the list is open with pages and the game has focus, each
- * notch (120) counts a step, up = previous page, and the wheel message goes no further (best effort: a game reading
- * raw input may still see it). The game update takes the steps. "Open" expires by itself (g_wheel_until, renewed by
+ * notch (120) counts a step, up = next page (the previous with page_wheel_invert), and the wheel message goes no
+ * further (best effort: a game reading raw input may still see it). The game update takes the steps. "Open" expires by itself (g_wheel_until, renewed by
  * every game update that sees the list open and, with the label's hook, drawn), so the wheel is never kept from
  * anything else if the game stops updating or the list goes away without closing. */
 #define WHEEL_LIVE_MS 250u
@@ -2113,8 +2450,9 @@ static LRESULT CALLBACK MouseHook(int code, WPARAM message, LPARAM data)
         else
         {
             rest += (short)HIWORD(((const MSLLHOOKSTRUCT*)data)->mouseData);
-            for (; rest >= WHEEL_DELTA; rest -= WHEEL_DELTA) InterlockedDecrement(&g_wheel_steps);
-            for (; rest <= -WHEEL_DELTA; rest += WHEEL_DELTA) InterlockedIncrement(&g_wheel_steps);
+            LONG up = g_wheel_invert ? -1 : 1;
+            for (; rest >= WHEEL_DELTA; rest -= WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, up);
+            for (; rest <= -WHEEL_DELTA; rest += WHEEL_DELTA) InterlockedExchangeAdd(&g_wheel_steps, -up);
             return 1;
         }
     }
@@ -2159,6 +2497,112 @@ static void StopWheel(void)
 
 /* ---- every game update ------------------------------------------------------------------------------------------- */
 
+/* The stratagem in hand, every update: the in-hand record is kept on the row its entry is in, an entry in hand that is
+ * out of the list is put in it, and a held entry that is done (not in hand any more, landed and called in) leaves the
+ * list again, so the rows the page leaves free are free for the next. */
+static void FollowHand(ULONGLONG ms)
+{
+    Hand hand;
+    int in_hand = HandOf(&hand); /* (also learns the local player's id, for BallEnded) */
+    if (g_hand_moved.pending)
+    {
+        /* the record this mod wrote an update ago: does the game keep the row? */
+        g_hand_moved.pending = 0;
+        if (!in_hand) LOG_ONCE(LOG_HAND, "in hand: an update after type %u's record was pointed at row %u, no record is "
+                               "there", g_hand_moved.type, g_hand_moved.row + 1);
+        else
+            LOG_ONCE(LOG_HAND, "in hand: an update after type %u's record was pointed at row %u, it names type %u, row %u"
+                     "; its twin row %d%s", g_hand_moved.type, g_hand_moved.row + 1, hand.type, hand.row + 1,
+                     hand.twin != NULL ? (int)Get32(hand.twin + TWIN_ROW) + 1 : 0,
+                     hand.type == g_hand_moved.type && hand.row == g_hand_moved.row ? " (kept)" : " (NOT kept)");
+    }
+    uint8_t* list = Following() ? LocalList() : NULL;
+    uint32_t n = list != NULL ? Get32(list + LOADOUT_COUNT) : 0;
+    if (list == NULL || n > GAME_LIST_MAX) return;
+
+    /* The record names a row that holds another entry. Not acted on at once: when the stratagem list opens, the record
+     * shows for one update with the type and row of the last stratagem thrown, before the game clears it or the next
+     * code fills it (seen in game, 0.2.0: that stratagem was put in the list of the page shown, for nothing). */
+    static uint32_t odd_type, odd_row;
+    static ULONGLONG odd_since;
+    int odd = in_hand && !(hand.row < n && EntryType(list, hand.row) == hand.type);
+    if (!odd) odd_since = 0;
+    else if (odd_since == 0 || odd_type != hand.type || odd_row != hand.row)
+    {
+        odd_type = hand.type;
+        odd_row = hand.row;
+        odd_since = ms;
+    }
+    if (odd && ms - odd_since >= HAND_SETTLE_MS)
+    {
+        /* still so (the list changed between the code and the hand, or in a way this mod did not make): its type's
+         * entry, put in the list first if it is out */
+        static ULONGLONG tried;      /* the list is not written again every update for an entry that finds no row */
+        static uint32_t said_type, said_row;
+        uint32_t i = 0;
+        while (i < n && EntryType(list, i) != hand.type) i++;
+        if (i == n && ms - tried >= 250)
+            for (uint32_t k = 0; k < g_pager.items; k++)
+                if (!g_pager.gone[k] && Get32(g_pager.state[k]) == hand.type && !g_pager.shown[k])
+                {
+                    tried = ms;
+                    g_refitting = 1;
+                    if (Bring(k, "a stratagem in hand"))
+                    {
+                        n = Get32(list + LOADOUT_COUNT);
+                        for (i = 0; i < n && EntryType(list, i) != hand.type; i++) {}
+                    }
+                    g_refitting = 0;
+                    break;
+                }
+        if (i < n) HandMove(hand.type, hand.row, i, n, "its row held another entry");
+        else if (said_type != hand.type || said_row != hand.row)
+        {
+            said_type = hand.type;
+            said_row = hand.row;
+            LOG_ONCE(LOG_HAND, "in hand: type %u's record names row %u, which holds type %u, and the type is not in the "
+                     "list", hand.type, hand.row + 1, hand.row < n ? EntryType(list, hand.row) : 0);
+        }
+    }
+
+    uint64_t now = Now();
+    int done = 0;
+    for (uint32_t k = 0; k < g_pager.items; k++)
+    {
+        if (!g_pager.held[k] || g_pager.gone[k]) continue;
+        uint32_t type = Get32(g_pager.state[k]), i = 0;
+        if (in_hand && hand.type == type)
+        {
+            g_pager.held_until[k] = ms + HELD_GRACE_MS;
+            continue;
+        }
+        while (i < n && EntryType(list, i) != type) i++;
+        if (i < n && CallingIn(list + LOADOUT_SLOTS + i * LOADOUT_SLOT, now)) continue;
+        if (ms >= g_pager.held_until[k]) done = 1;
+    }
+    if (done)
+    {
+        g_refitting = 1;
+        SwitchPage(g_pager.page, "a held stratagem is done", 0);
+        g_refitting = 0;
+    }
+}
+
+/* The list is still the mission's: one of the game's entries it went to the mission with (Reinforce, Resupply...) is
+ * in it. When the mission ends the game puts the profile's loadout, picks only, in the same list, some seconds before
+ * it resets it and while the game's state is still the mission's. Those picks are the pages' own types, so the update
+ * took the list for a page too full and cut it down to one (seen in the logs up to 0.2.0's first build: 16 -> 14, and
+ * 16 -> 13 with another page's entries). Nothing was seen to go wrong after, but the list is not this mod's then. */
+static int MissionList(const uint8_t* list)
+{
+    uint32_t n = Get32(list + LOADOUT_COUNT);
+    if (g_pager.fixed == 0) return 1;
+    for (uint32_t i = 0; i < n && i < GAME_LIST_MAX; i++)
+        for (uint32_t j = 0; j < g_pager.fixed; j++)
+            if (EntryType(list, i) == g_pager.fixed_types[j]) return 1;
+    return 0;
+}
+
 /* The page keys and the wheel, while the list is open. */
 static void Tick(HfMod* mod, float dt, void* user)
 {
@@ -2171,10 +2615,22 @@ static void Tick(HfMod* mod, float dt, void* user)
     ULONGLONG ms = GetTickCount64();
     /* What other mods (or the mission) added to the list since the last update: counted, taken into the pages, and if
      * the list is then fuller than a page allows, the page is put in again so the rows left free are free again (the
-     * next addition needs them). Held back like any page change while a stratagem is coming in. */
+     * next addition needs them). With page_lock = on, held back like any page change while a stratagem is coming in. */
     int mission = hf->game_state(self) == HF_STATE_MISSION;
     InterlockedExchange(&g_in_mission, mission);
-    if (g_pager.active && mission)
+    /* a list that is not the mission's (any more, or yet) is left as it is: no refit, no page change */
+    static int was_ours = 1;
+    const uint8_t* ours_list = g_pager.active && mission ? LocalList() : NULL;
+    int ours = ours_list != NULL && MissionList(ours_list);
+    if (ours_list != NULL && ours != was_ours)
+    {
+        was_ours = ours;
+        if (ours) LOG_ONCE(LOG_PAGE, "pages: the list is the mission's again");
+        else
+            LOG_ONCE(LOG_PAGE, "pages: none of the game's %u entries from ready-up are in the list (%u entries; the "
+                     "mission is over?): the list is left as it is", g_pager.fixed, Get32(ours_list + LOADOUT_COUNT));
+    }
+    if (g_pager.active && mission && ours)
     {
         const uint8_t* now = LocalList();
         uint32_t n = now != NULL ? Get32(now + LOADOUT_COUNT) : 0;
@@ -2197,6 +2653,7 @@ static void Tick(HfMod* mod, float dt, void* user)
                 g_pager.active = 0;
             }
         }
+        if (now != NULL && g_pager.active && g_pager.checked && g_follow_ok) FollowHand(ms);
         if (now != NULL && g_pager.active && g_pager.checked && FitPages(now) > g_pager.per_page)
         {
             g_refitting = 1;
@@ -2214,7 +2671,7 @@ static void Tick(HfMod* mod, float dt, void* user)
             g_refitting = g_park_refit = 0;
         }
     }
-    int live = g_pager.active && g_pager.pages >= 2 && g_list_is_open &&
+    int live = g_pager.active && (!mission || ours) && g_pager.pages >= 2 && g_list_is_open &&
                (!g_label_ok || ms - (ULONGLONG)g_list_seen < WHEEL_LIVE_MS) && GameFocused();
     InterlockedExchange64(&g_wheel_until, live ? (LONG64)(ms + WHEEL_LIVE_MS) : 0);
     LONG wheel = InterlockedExchange(&g_wheel_steps, 0);
@@ -2223,7 +2680,8 @@ static void Tick(HfMod* mod, float dt, void* user)
     if (step == 0) return;
     if (!press_next && !press_prev && (wheel > 1 || wheel < -1))
         InterlockedExchangeAdd(&g_wheel_steps, wheel - step); /* the rest for the next updates */
-    const char* why = press_next ? "next key" : press_prev ? "previous key" : step > 0 ? "wheel down" : "wheel up";
+    const char* why = press_next ? "next key" : press_prev ? "previous key" :
+                      (step > 0) != (g_wheel_invert != 0) ? "wheel up" : "wheel down";
     uint32_t to = step > 0 ? (g_pager.page + 1) % g_pager.pages : (g_pager.page + g_pager.pages - 1) % g_pager.pages;
     if (SwitchPage(to, why, 0) > 0) play_sound(0, SOUND_MOVE);
     else InterlockedExchange(&g_wheel_steps, 0); /* held back: drop the rest of the wheel's steps */
@@ -2326,12 +2784,14 @@ static const char kDefaultSettings[] =
     "page_prev = Q\r\n"
     "page_next = E\r\n"
     "\r\n"
-    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off).\r\n"
+    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off): wheel up is the next page,\r\n"
+    "# wheel down the previous one. With page_wheel_invert on it is the other way around.\r\n"
     "page_wheel = on\r\n"
+    "page_wheel_invert = off\r\n"
     "\r\n"
-    "# Stops you from switching pages while a stratagem is being activated (on). With off you can switch right away, but\r\n"
-    "# the stratagem being activated shows the wrong name until it lands.\r\n"
-    "page_hold = on\r\n"
+    "# Stops you from switching pages while a stratagem is in your hand or being called in (on). With off you can switch\r\n"
+    "# at any time, and a stratagem in your hand stays in the list until it has been called in.\r\n"
+    "page_lock = off\r\n"
     "\r\n"
     "# Puts stratagems that other mods add to your list during a mission in the pages after your own (on). With off they\r\n"
     "# stay on every page, which leaves less room for yours.\r\n"
@@ -2403,6 +2863,7 @@ static void ReadSettings(void)
     if (!ok) return;
     text[size] = 0;
 
+    int old_hold = 0;
     for (char* line = text; line != NULL && *line;)
     {
         char* end = strchr(line, '\n');
@@ -2432,14 +2893,19 @@ static void ReadSettings(void)
                 continue;
             }
             int is_wheel = key_len == 10 && memcmp(line, "page_wheel", 10) == 0;
-            int is_hold = key_len == 9 && memcmp(line, "page_hold", 9) == 0;
+            int is_lock = key_len == 9 && memcmp(line, "page_lock", 9) == 0;
             int is_added = key_len == 10 && memcmp(line, "page_added", 10) == 0;
             int is_rearm = key_len == 10 && memcmp(line, "page_rearm", 10) == 0;
-            if (is_wheel || is_hold || is_added || is_rearm)
+            /* (page_hold, 0.1's setting with on as its default, is not read any more: every file made then has it on,
+             * and the pages no longer need it) */
+            if (key_len == 9 && memcmp(line, "page_hold", 9) == 0) old_hold = 1;
+            int is_invert = key_len == 17 && memcmp(line, "page_wheel_invert", 17) == 0;
+            if (is_wheel || is_lock || is_added || is_rearm || is_invert)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
-                *(is_wheel ? &g_wheel_on : is_hold ? &g_page_hold : is_added ? &g_page_added : &g_page_rearm) =
+                *(is_wheel ? &g_wheel_on : is_lock ? &g_page_lock : is_added ? &g_page_added : is_rearm ? &g_page_rearm :
+                  &g_wheel_invert) =
                     !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 || _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
@@ -2457,8 +2923,12 @@ static void ReadSettings(void)
         line = end != NULL ? end + 1 : NULL;
     }
     hf->log(self, "read %s: slots = %u, per_row = %u (before limits), page keys 0x%02X / 0x%02X, page_wheel %s, "
-            "page_hold %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev, g_key_next,
-            g_wheel_on ? "on" : "off", g_page_hold ? "on" : "off", g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
+            "page_wheel_invert %s, page_lock %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev,
+            g_key_next, g_wheel_on ? "on" : "off", g_wheel_invert ? "on" : "off", g_page_lock ? "on" : "off",
+            g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
+    if (old_hold)
+        hf->log(self, "page_hold in %s is not a setting any more and was not read: pages change at any time now. "
+                "page_lock = on brings the old behaviour back", path);
 }
 
 /* ---- start ------------------------------------------------------------------------------------------------------- */
@@ -2556,6 +3026,27 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
                 eagles = 0; /* the log says why; the hooks made stay, and do nothing without g_eagles_ok */
         g_eagles_ok = eagles;
     }
+    /* following a stratagem in hand reads the in-hand records the Eagles' code finds, and writes their row */
+    int follow = g_eagles_ok;
+    for (uint32_t i = 0; i < HAND_CODE_COUNT && follow; i++)
+        if (!hf->code_matches(game + kHandCode[i].rva, kHandCode[i].pattern))
+        {
+            hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: pages can't change while a stratagem is in "
+                    "hand or being called in", kHandCode[i].name, kHandCode[i].rva);
+            follow = 0;
+        }
+    g_follow_ok = follow;
+    if (!follow && !g_page_lock)
+        hf->log(mod, "page_lock = off, but the pages can't follow a stratagem in hand here: they are locked while one is "
+                "in hand or being called in");
+    int ball = follow;
+    if (ball && !hf->code_matches(game + RVA_BALL_ENDED, kBallEndedCode))
+    {
+        hf->log(mod, "the game's thrown stratagem's end (0x%X) is not the code this mod knows: one that ends without an "
+                "activation after a page change marks another row for 2 s", RVA_BALL_ENDED);
+        ball = 0;
+    }
+    if (ball && hf->hook(mod, game + RVA_BALL_ENDED, (void*)BallEnded, (void**)&g_ball_ended) != 0) ball = 0; /* the log says why */
     /* parking asks in the label's hook and tells a loadout's stratagems by the Eagles' table */
     int park = g_label_ok && g_eagles_ok;
     for (uint32_t i = 0; i < PARK_CODE_COUNT && park; i++)
@@ -2572,8 +3063,10 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
                 "stratagem in hand");
     else StartWheel();
     hf->log(mod, "ready: %u stratagem slots, %u per row, page label %s, Eagles across pages %s, mouse wheel %s, parking "
-            "%s", g_slots, g_per_row, g_label_ok ? "on" : "off", g_eagles_ok ? "on" : "off",
-            g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off");
+            "%s, pages %s, thrown stratagem's end %s", g_slots, g_per_row, g_label_ok ? "on" : "off",
+            g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off",
+            Following() ? "follow a stratagem in hand" : "locked while a stratagem is in hand or being called in",
+            ball ? "hooked" : "not hooked");
 }
 
 /* Taken out of the running game (or replaced): stop the wheel's thread, which the API doesn't know about. */

@@ -41,20 +41,27 @@ With the default install location that is `%USERPROFILE%\Documents\HellForge\mod
 
 The file is created with the defaults the first time you start the game with the mod switched on. Open it with a text editor, change a value and save. Changes apply the next time the game starts.
 
-| Setting      | Default | Description                                                                                                                                                                                             |
-| ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slots`      | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
-| `per_row`    | `4`     | The number of slots per row on the loadout screen, from 4 to 20.                                                                                                                                        |
-| `page_prev`  | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
-| `page_next`  | `E`     | The key for the next page.                                                                                                                                                                              |
-| `page_wheel` | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open.                                                                                                                                |
-| `page_hold`  | `on`    | Stops you from switching pages while a stratagem is being activated. With `off` you can switch right away, but the stratagem being activated will show the wrong name until it lands.                   |
-| `page_added` | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours.       |
-| `page_rearm` | `on`    | Shows Eagle Rearm on every page once an Eagle has spent a use, so you can rearm from any page. With `off` it only shows on the pages that hold an Eagle. Either way it rearms the Eagles on every page. |
+| Setting             | Default | Description                                                                                                                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
+| `per_row`           | `4`     | The number of slots per row on the loadout screen, from 4 to 20.                                                                                                                                        |
+| `page_prev`         | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
+| `page_next`         | `E`     | The key for the next page.                                                                                                                                                                              |
+| `page_wheel`        | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open: wheel up is the next page and wheel down the previous one.                                                                     |
+| `page_wheel_invert` | `off`   | Turns the mouse wheel around: wheel up is the previous page and wheel down the next one. Only takes effect with `page_wheel` on.                                                                        |
+| `page_lock`         | `off`   | Stops you from switching pages while a stratagem is in your hand or being called in. With `off` you can switch at any time, and a stratagem in your hand stays in the list until it has been called in. |
+| `page_added`        | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours.       |
+| `page_rearm`        | `on`    | Shows Eagle Rearm on every page once an Eagle has spent a use, so you can rearm from any page. With `off` it only shows on the pages that hold an Eagle. Either way it rearms the Eagles on every page. |
 
 A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or delete the file while the game is closed, and the mod writes a new one with every setting the next time the game starts. The mod can't add to an existing file itself, because HellForge keeps the files in `mods` read-only while the game runs.
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
+
+### Upgrading from an older version
+
+`page_hold` from before 0.2.0 is no longer read, so you can leave its line in the file or delete it. `page_lock = on` does what it did.
+
+From 0.2.0 wheel up is the next page and wheel down the previous one, the other way around from before. `page_wheel_invert = on` gives the old direction.
 
 ## Troubleshooting
 
