@@ -38,6 +38,8 @@
 #define RVA_NODE_SET_SIZE 0x1447160u
 #define RVA_SPECIAL_MODE 0x11DF110u /* the refresh skips types 77 and 90 while this is true */
 #define RVA_STRATAGEM_INFO 0x37CB600u /* StratagemInfo* [type] */
+#define RVA_G_STRATAGEM_ROWS 0x348E3FCu /* u32: the info rows the game loaded (149). With mods' stratagems HellForge
+                                         * writes the number of types there (the game's 150 and the mods') */
 /* focus and picking */
 #define RVA_HOVER 0x1894BC0u          /* (P, _, cursor off): per frame, which widget the cursor is over -> P + 55656 */
 #define RVA_NAV 0x18950B0u            /* (P, input, _, nav on): directions and the click; 2/1 open the picker */
@@ -1301,7 +1303,8 @@ static uint32_t FitPages(const uint8_t* list)
 #define CALL_HOLD_US 2000000ull  /* after a call-in ends its row flashes 1.5 s ("activating") */
 #define TYPE_EAGLE_REARM 49u
 #define INFO_LINKED 200u         /* u32: the type it brings along (an Eagle's is Eagle Rearm) */
-#define INFO_TYPES 198u          /* the game's 150 and HellForge's room for 48 more */
+#define INFO_VANILLA 150u        /* the types of the game's own info table (0..149) */
+#define INFO_MOVED 198u          /* the least a table moved by HellForge holds: the game's 150 and room for 48 more */
 
 static uint64_t g_view_until;    /* the HUD rows are logged until then, after a page change */
 
@@ -2064,15 +2067,23 @@ static void ListOpen(uint8_t* hud, uint8_t open)
  * they count when the game asks whether any Eagle still has uses left (it starts the rearm by itself when none has) or
  * whether any is below its full uses. */
 
-/* A type's info row from the table the game uses (HellForge moves it for stratagem mods), or NULL. */
+/* A type's info row from the table the game uses, or NULL. The lea names the table: the game's own, of INFO_VANILLA
+ * types, unless a mod adds stratagems. Then HellForge has moved it (and patched the lea) to one with room for
+ * INFO_MOVED types (0.4) or more (0.5: 1,024 more than the game's), and RVA_G_STRATAGEM_ROWS holds how many it has.
+ * 0.5 keeps that number there; on 0.4 the game sets it back to 149 when it loads its stratagem settings again. */
 static const uint8_t* Info(uint32_t type)
 {
-    if (type == 0 || type >= INFO_TYPES) return NULL;
     const uint8_t* lea = (const uint8_t*)(game + RVA_COOLDOWN_TABLE);
     int32_t disp;
     memcpy(&disp, lea + 3, 4);
     const uint8_t* const* table = (const uint8_t* const*)(lea + 7 + disp);
-    return table[type];
+    uint32_t types = INFO_VANILLA;
+    if ((uintptr_t)table != game + RVA_STRATAGEM_INFO)
+    {
+        types = Get32((const uint8_t*)(game + RVA_G_STRATAGEM_ROWS));
+        if (types < INFO_MOVED) types = INFO_MOVED;
+    }
+    return type != 0 && type < types ? table[type] : NULL;
 }
 
 static int IsEagle(uint32_t type)
