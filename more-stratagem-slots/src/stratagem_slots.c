@@ -111,6 +111,15 @@
                                        * is a list index (the stratagem in hand, and perhaps thrown), not a type */
 #define RVA_G_ARMED 0x3326D98u        /* pointer; +28 u32 count, +96 records of 40 bytes */
 
+/* Parking (see "parking"): what the game asks about a list entry before it shows or takes it */
+#define RVA_AVAILABLE 0x66C920u       /* (stratagems, list, row) -> 1: the entry can be used where the player is now (an
+                                       * objective's stratagem only in its objective's area, Eagle Rearm only with a
+                                       * spent Eagle...). Reads the entry's type and the list's player id (+0x9E8); the
+                                       * HUD row hides an entry without it (HudStratagemRow_Update, 0x183764B) and the
+                                       * input skips it (0x66C880) */
+#define RVA_STRATAGEMS_READ 0x66D8F1u /* mov rsi, [game + RVA_G_STRATAGEMS] */
+#define RVA_G_STRATAGEMS 0x33266D0u   /* pointer: what RVA_AVAILABLE takes first */
+
 static const struct { uint32_t rva; const char* pattern; const char* name; } kCode[] = {
     { RVA_REFRESH, "40 55 56 41 54 41 55 48 8D AC 24 78 F0 FF FF B8 88 10 00 00 E8 ?? ?? ?? ?? 48 2B E0", "refresh" },
     { RVA_BUILD_PANEL, "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC B0", "build panel" },
@@ -188,6 +197,14 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kEa
 };
 #define EAGLE_CODE_COUNT (sizeof kEagleCode / sizeof kEagleCode[0])
 
+/* Parking's code: without it (or without the label's and the Eagles', which it uses) nothing is parked. */
+static const struct { uint32_t rva; const char* pattern; const char* name; } kParkCode[] = {
+    { RVA_AVAILABLE, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 70 48 8B 05 ?? ?? "
+      "?? ?? 48 33 C4 48 89 44 24 60 41 8B C0 45 33", "stratagem available" },
+    { RVA_STRATAGEMS_READ, "48 8B 35 D8 8D CB 02 45 33 F6 3B 15", "stratagem input's system" },
+};
+#define PARK_CODE_COUNT (sizeof kParkCode / sizeof kParkCode[0])
+
 /* The panel */
 #define PANEL_SLOTS 36544u       /* the game's 4 slot widgets */
 #define PANEL_SHOWN 55648u       /* u64: the loadout record the panel shows */
@@ -262,6 +279,10 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kEa
 #define GAME_LIST_MAX 16u        /* entries the game's lists hold: picks plus its own additions */
 #define LIST_SPARE 2u            /* rows a page leaves free for what the mission grants later (its appends clamp at 16) */
 #define MIN_PAGE 4u              /* fewer picks a page than this: no pages, the guard trims */
+#define PARK_FROM 8u             /* this many entries of the game's at ready-up, in a loadout that needs pages: those
+                                  * the player can't use yet are parked (see "parking"). A mission of the game's own
+                                  * has had 4 or 5; HellForge's level 11 (two missions in one) 11 */
+#define PARK_EVERY_MS 100u       /* how often the parked entries are asked about */
 #define MAX_PANELS 16u
 
 /* PlayerHistory: one entry per player, the in-mission list at +56 (the record's layout) */
@@ -324,6 +345,7 @@ typedef void (*CooldownFn)(uint8_t* history, uint64_t peer, uint32_t slot, uint8
 typedef void (*CooldownSystemsFn)(uint64_t peer, uint32_t slot, uint8_t set_start, float seconds);
 typedef uint8_t (*EaglesSpentFn)(uint8_t* unused, uint32_t player);
 typedef uint8_t (*EaglesUsedFn)(uint8_t* unused, uint8_t* list);
+typedef uint8_t (*AvailableFn)(const uint8_t* stratagems, const uint8_t* list, uint32_t row);
 
 /* ---- state ------------------------------------------------------------------------------------------------------- */
 
@@ -387,6 +409,8 @@ static CooldownSystemsFn g_cooldown_systems;
 static EaglesSpentFn g_eagles_spent;
 static EaglesUsedFn g_eagles_used;
 static int g_eagles_ok;           /* the Eagles' code matched and is hooked */
+static AvailableFn g_available;
+static int g_park_ok;             /* parking's code matched (and the label's hook and the Eagles' are there) */
 static int g_activating_local;    /* inside the game's activation of a local player's stratagem */
 static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
@@ -409,9 +433,9 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PROFILE, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE,
-       LOG_ROWS, LOG_WHEEL, LOG_KINDS };
+       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 200, 24, 6, 40, 200, 12 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 200, 24, 6, 40, 200, 12, 120 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -1031,10 +1055,19 @@ typedef struct
     uint8_t state[MAX_ITEMS][LOADOUT_SLOT]; /* its entry now (for the items in the list: as of the last page change) */
     uint8_t gone[MAX_ITEMS];      /* left the list during the mission (used up): not put back */
     uint8_t shown[MAX_ITEMS];     /* put in the list by the last page change (or at ready-up) */
+    /* parking: the game's entries taken out of the record at ready-up, each in the list only while it can be used */
+    uint32_t parks;
+    uint8_t park_fresh[GAME_LIST_MAX][LOADOUT_SLOT]; /* its entry at ready-up */
+    uint8_t park_state[GAME_LIST_MAX][LOADOUT_SLOT]; /* its entry now (in the list: as of the last change) */
+    uint8_t park_in[GAME_LIST_MAX];   /* put in the list by the last change */
+    uint8_t park_gone[GAME_LIST_MAX]; /* left the list during the mission (used up) */
+    volatile uint8_t park_want[GAME_LIST_MAX]; /* the game would show it now (ParkAsk, in the HUD list's update) */
 } Pager;
 static Pager g_pager;
 static int g_list_is_open;
 static int g_refitting;           /* the page change under way is the update's own (room in the list), not the player's */
+static int g_park_refit;          /* ... and only for the parked entries: the page stays as it is */
+static volatile LONG g_in_mission; /* Tick saw the mission's state */
 
 static uint32_t EntryType(const uint8_t* list, uint32_t i) { return Get32(list + LOADOUT_SLOTS + i * LOADOUT_SLOT); }
 
@@ -1078,6 +1111,68 @@ static int Selectable(uint32_t type)
     return info != NULL && Get32(info + INFO_STABLE) != 0 && (Get32(info + INFO_FLAGS) & 2) != 0;
 }
 
+/* ---- parking ------------------------------------------------------------------------------------------------------ */
+
+/* A mission with many objectives (HellForge's level 11 is two missions in one) starts with all its objectives'
+ * stratagems in the list: 11 of the game's own entries, and so 5 rows for the picks. The game shows and takes such an
+ * entry only where it can be used (RVA_AVAILABLE: in its objective's area, mostly), and never adds or removes it. So,
+ * from PARK_FROM entries of the game's on, those are parked: taken out of the record at ready-up and kept here with
+ * their state, like a pick on another page. The HUD list's update asks the game about each (ParkAsk); one that can be
+ * used goes back in the list, after the page's picks (so no pick's row moves), and out again when it can't. They take
+ * the rows a page leaves free first (LIST_SPARE); a page gets smaller only when more of them are in at once.
+ *
+ * Never parked: what a loadout can hold (a level's own stratagem, like level 11's FRV), and the entries the game finds
+ * by type by itself or that the player expects on every page: */
+static int Parkable(uint32_t type)
+{
+    switch (type)
+    {
+    case 124u: /* Reinforce */
+    case 123u: /* (its other kind: 0x66A1440 knows both) */
+    case 145u: /* SOS Beacon */
+    case 33u:  /* Resupply */
+    case 128u: /* Upload Discovery */
+    case 49u:  /* Eagle Rearm: the game starts it by itself when the Eagles are spent */
+        return 0;
+    }
+    return g_eagles_ok && Info(type) != NULL && !Selectable(type);
+}
+
+/* The parked entries that are in the list: each one's row (or -1), by type among the rows not taken, which it takes.
+ * Returns how many. */
+static uint32_t FindParks(const uint8_t* list, uint32_t n, uint8_t* taken, int* row)
+{
+    uint32_t in = 0;
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+    {
+        row[c] = -1;
+        if (g_pager.park_gone[c]) continue;
+        uint32_t type = Get32(g_pager.park_state[c]), i = 0;
+        while (i < n && (taken[i] || Get32(list + LOADOUT_SLOTS + i * LOADOUT_SLOT) != type)) i++;
+        if (i == n) continue;
+        taken[i] = 1;
+        row[c] = (int)i;
+        in++;
+    }
+    return in;
+}
+
+/* A parked entry that was put in the list and is not there any more was used up, as a pick is. Not when the list was
+ * full: then an entry appended since has its row (the game's appends write over row 16), and it is still this mod's to
+ * put back, as it was at the last change. */
+static int ParkUsedUp(uint32_t c, const int* row, uint32_t n)
+{
+    return g_pager.park_in[c] && row[c] < 0 && n < GAME_LIST_MAX;
+}
+
+/* A parked entry is not where the game would have it now (in the list or out of it). */
+static int ParkPending(void)
+{
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+        if (!g_pager.park_gone[c] && (g_pager.park_want[c] != 0) != (g_pager.park_in[c] != 0)) return 1;
+    return 0;
+}
+
 /* The list against the pages. Its entries are the items in it, the game's own from ready-up, and whatever was added
  * since (by the mission, or by another mod such as P.S.S.). With page_added, an added loadout stratagem is taken in as
  * an item after the picks, so it is in the pages like them; anything else stays on every page. A page is as many items
@@ -1098,6 +1193,12 @@ static uint32_t FitPages(const uint8_t* list)
         taken[i] = 1;
         ours++;
     }
+    /* the parked entries in the list are neither the picks' nor entries that stay; those the game would show now
+     * get rows whether they are in yet or not */
+    int park_row[GAME_LIST_MAX];
+    uint32_t parked_in = FindParks(list, n, taken, park_row), wanted = 0;
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+        if (!g_pager.park_gone[c] && g_pager.park_want[c] && !ParkUsedUp(c, park_row, n)) wanted++;
     uint32_t fixed_types[GAME_LIST_MAX];
     memcpy(fixed_types, g_pager.fixed_types, sizeof fixed_types);
     for (uint32_t i = 0; i < n; i++)
@@ -1126,9 +1227,10 @@ static uint32_t FitPages(const uint8_t* list)
         ours++;
         g_pager.paged = 1;
     }
-    uint32_t others = n - ours, room = GAME_LIST_MAX - others;
+    uint32_t others = n - ours - parked_in, room = GAME_LIST_MAX - others;
     /* a loadout that fits and has had nothing added keeps its one page, with whatever rows are free */
     uint32_t spare = g_pager.paged ? LIST_SPARE : 0;
+    if (wanted > spare) spare = wanted; /* the parked entries shown take the free rows first, then the page's */
     uint32_t per = room > spare ? room - spare : 1;
     uint32_t pages = (g_pager.items + per - 1) / per;
     if (pages == 0) pages = 1;
@@ -1228,10 +1330,23 @@ static int SwitchPage(uint32_t to, const char* why, int force)
         taken[i] = 1;
         found[k] = (int)i;
     }
+    int park_row[GAME_LIST_MAX]; /* the parked entries in the list now: where each is, or -1 */
+    FindParks(list, n, taken, park_row);
     for (uint32_t i = 0; i < n; i++)
     {
         if (taken[i]) continue;
         memcpy(keep[kept++], list + LOADOUT_SLOTS + i * LOADOUT_SLOT, LOADOUT_SLOT);
+    }
+    /* the parked entries the game would show now: after the page, so that one coming or going moves no pick's row */
+    uint8_t tail[GAME_LIST_MAX][LOADOUT_SLOT];
+    uint8_t in_tail[GAME_LIST_MAX] = { 0 };
+    uint32_t tails = 0;
+    for (uint32_t c = 0; c < g_pager.parks && kept + tails < GAME_LIST_MAX; c++)
+    {
+        if (g_pager.park_gone[c] || !g_pager.park_want[c] || ParkUsedUp(c, park_row, n)) continue;
+        memcpy(tail[tails++], park_row[c] >= 0 ? list + LOADOUT_SLOTS + (uint32_t)park_row[c] * LOADOUT_SLOT :
+               g_pager.park_state[c], LOADOUT_SLOT);
+        in_tail[c] = 1;
     }
     /* The page goes after every entry that stays. The HUD draws granted entries (the mission's, another mod's) before
      * the picks, in the list's order: with the page in front of the game's trailing entries (an objective's stratagem,
@@ -1239,7 +1354,7 @@ static int SwitchPage(uint32_t to, const char* why, int force)
     insert_at = kept;
 
     uint8_t out[GAME_LIST_MAX][LOADOUT_SLOT];
-    uint32_t count = 0, put = 0, room = GAME_LIST_MAX - kept; /* the game's entries always stay */
+    uint32_t count = 0, put = 0, room = GAME_LIST_MAX - kept - tails; /* the game's entries always stay */
     for (uint32_t i = 0; i <= kept; i++)
     {
         if (i == insert_at)
@@ -1255,6 +1370,7 @@ static int SwitchPage(uint32_t to, const char* why, int force)
                 }
         if (i < kept && count < GAME_LIST_MAX) memcpy(out[count++], keep[i], LOADOUT_SLOT);
     }
+    for (uint32_t t = 0; t < tails && count < GAME_LIST_MAX; t++) memcpy(out[count++], tail[t], LOADOUT_SLOT);
 
     /* the rows the game ties to a stratagem by their index: being called in, or named by an in-hand record (which is
      * not waited for longer than ARMED_HOLD_MS, in case it outlives the throw) */
@@ -1300,13 +1416,37 @@ static int SwitchPage(uint32_t to, const char* why, int force)
         memcpy(g_pager.state[k], list + LOADOUT_SLOTS + (uint32_t)found[k] * LOADOUT_SLOT, LOADOUT_SLOT);
     }
     memcpy(g_pager.shown, placed, sizeof g_pager.shown);
+    /* the parked entries, the same way: one in the list keeps its state from there, in or out */
+    uint32_t parked_now = 0;
+    for (uint32_t c = 0; c < g_pager.parks; c++)
+    {
+        if (g_pager.park_gone[c]) continue;
+        uint32_t type = Get32(g_pager.park_state[c]);
+        if (park_row[c] >= 0)
+            memcpy(g_pager.park_state[c], list + LOADOUT_SLOTS + (uint32_t)park_row[c] * LOADOUT_SLOT, LOADOUT_SLOT);
+        else if (ParkUsedUp(c, park_row, n))
+        {
+            g_pager.park_gone[c] = 1;
+            LOG_ONCE(LOG_PARK, "parking: type %u left the list (used up); not put back", type);
+            continue;
+        }
+        else if (g_pager.park_in[c])
+            LOG_ONCE(LOG_PARK, "parking: type %u lost its row in a full list; kept as it was at the last change", type);
+        if (in_tail[c] != (park_row[c] >= 0))
+            LOG_ONCE(LOG_PARK, "parking: type %u %s (page %u of %u, %u picks in, list %u -> %u)", type,
+                     in_tail[c] ? "can be used: in the list" : "can't be used now: out of the list", to + 1, g_pager.pages,
+                     put, n, count);
+        g_pager.park_in[c] = in_tail[c];
+        if (!in_tail[c]) parked_now++;
+    }
     uint8_t* slots = list + LOADOUT_SLOTS;
     memcpy(slots, out, (size_t)count * LOADOUT_SLOT);
     if (count < n) memset(slots + count * LOADOUT_SLOT, 0, (size_t)(n - count) * LOADOUT_SLOT);
     Put32(list + LOADOUT_COUNT, count);
-    LOG_ONCE(LOG_PAGE, "page %u of %u (%s): %u picks in, the game's %u kept, list %u -> %u", to + 1, g_pager.pages, why,
-             put, kept, n, count);
     g_pager.page = to;
+    if (g_park_refit) return 1; /* the same page, around a parked entry: its own lines above */
+    LOG_ONCE(LOG_PAGE, "page %u of %u (%s): %u picks in, the game's %u kept, %u parked, list %u -> %u", to + 1,
+             g_pager.pages, why, put, kept, parked_now, n, count);
     if (now != 0) g_view_until = now + 8000000ull;
     return 1;
 }
@@ -1379,19 +1519,66 @@ static void Augment(uint8_t* record)
             lstrcatA(added_list, one);
         }
 
+    /* With this many entries of the game's, those the player can't use yet don't go to the mission in the list: they
+     * are parked (see "parking"), unless that still leaves no room for a page. */
+    uint8_t park[LOADOUT_MAX] = { 0 };
+    uint32_t parks = 0;
+    char parked_list[GAME_LIST_MAX * 12] = "";
+    if (g_park_ok && matched == picks && added >= PARK_FROM)
+        for (uint32_t i = 0; i < after && parks < GAME_LIST_MAX; i++)
+        {
+            uint32_t type = EntryType(record, i), j = 0;
+            if (pick_of[i] >= 0 || !Parkable(type)) continue;
+            while (j < i && !(park[j] && EntryType(record, j) == type)) j++;
+            if (j < i) continue; /* a second entry of a type stays */
+            park[i] = 1;
+            parks++;
+            char one[12];
+            wsprintfA(one, parked_list[0] ? " %u" : "%u", type);
+            lstrcatA(parked_list, one);
+        }
+    if (g_park_ok && matched == picks && added >= PARK_FROM)
+    {
+        /* what the choice was made from: each of the game's entries with its info row's loadout flags (+128) and the
+         * kind of area it is tied to (+124, which RVA_AVAILABLE looks the player up in) */
+        char info_list[LOADOUT_MAX * 28] = "";
+        for (uint32_t i = 0; i < after; i++)
+        {
+            const uint8_t* info = pick_of[i] < 0 ? Info(EntryType(record, i)) : NULL;
+            if (info == NULL || lstrlenA(info_list) + 28 >= (int)sizeof info_list) continue;
+            char one[28];
+            wsprintfA(one, " %u:%X:%u%s", EntryType(record, i), Get32(info + INFO_FLAGS), Get32(info + 124u),
+                      park[i] ? "p" : "");
+            lstrcatA(info_list, one);
+        }
+        LOG_ONCE(LOG_PARK, "parking: the game's entries, type:flags:area (p: can be parked):%s", info_list);
+    }
+    if (parks != 0 && added - parks + LIST_SPARE + MIN_PAGE > GAME_LIST_MAX)
+    {
+        memset(park, 0, sizeof park);
+        parks = 0;
+    }
+    uint32_t stay = added - parks;
+
     uint8_t out[GAME_LIST_MAX][LOADOUT_SLOT];
     uint32_t count = 0;
-    if (matched == picks && added + LIST_SPARE + MIN_PAGE <= GAME_LIST_MAX)
+    if (matched == picks && stay + LIST_SPARE + MIN_PAGE <= GAME_LIST_MAX)
     {
         memset(&g_pager, 0, sizeof g_pager);
         g_pager.picks = g_pager.items = picks;
-        g_pager.per_page = GAME_LIST_MAX - LIST_SPARE - added;
+        g_pager.per_page = GAME_LIST_MAX - LIST_SPARE - stay;
         g_pager.in_record = picks < g_pager.per_page ? picks : g_pager.per_page;
         g_pager.pages = (picks + g_pager.per_page - 1) / g_pager.per_page;
         g_pager.paged = 1;
         for (uint32_t i = 0; i < after; i++)
         {
             const uint8_t* e = record + LOADOUT_SLOTS + i * LOADOUT_SLOT;
+            if (park[i])
+            {
+                memcpy(g_pager.park_fresh[g_pager.parks], e, LOADOUT_SLOT);
+                memcpy(g_pager.park_state[g_pager.parks++], e, LOADOUT_SLOT);
+                continue;
+            }
             if (pick_of[i] < 0 && g_pager.fixed < GAME_LIST_MAX) g_pager.fixed_types[g_pager.fixed++] = Get32(e);
             if (pick_of[i] >= 0)
             {
@@ -1406,6 +1593,9 @@ static void Augment(uint8_t* record)
         LOG_ONCE(LOG_PAGE, "record %p: %u picks and %u the game added (types %s): %u pages of %u picks (local player "
                  "id %llu)", (void*)record, picks, added, added_list, g_pager.pages, g_pager.per_page,
                  (unsigned long long)LocalPeer());
+        if (parks != 0)
+            LOG_ONCE(LOG_PARK, "parking: %u of the game's %u entries are out of the list until they can be used (types "
+                     "%s); %u stay", parks, added, parked_list, stay);
     }
     else
     {
@@ -1443,6 +1633,11 @@ static uint64_t Reset(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t g
             g_pager.pages = (g_pager.picks + g_pager.per_page - 1) / g_pager.per_page;
         }
         for (uint32_t k = 0; k < MAX_ITEMS; k++) g_pager.shown[k] = k < g_pager.in_record;
+        /* the parked entries are not in the record either: all out again, as at ready-up */
+        memcpy(g_pager.park_state, g_pager.park_fresh, sizeof g_pager.park_state);
+        memset(g_pager.park_in, 0, sizeof g_pager.park_in);
+        memset(g_pager.park_gone, 0, sizeof g_pager.park_gone);
+        for (uint32_t c = 0; c < GAME_LIST_MAX; c++) g_pager.park_want[c] = 0;
         LOG_ONCE(LOG_PAGE, "pages: the local list was reset (%u before); back to page 1", before);
     }
     return result;
@@ -1489,6 +1684,11 @@ static void LoadAssets(uint8_t* entry, uint32_t stage, uint8_t ack, uint64_t by,
         if (g_pager.gone[k] || g_pager.shown[k]) continue;
         memcpy(list + LOADOUT_SLOTS + count++ * LOADOUT_SLOT, g_pager.state[k], LOADOUT_SLOT);
     }
+    for (uint32_t c = 0; c < g_pager.parks && count < HISTORY_MAX; c++) /* and the parked entries */
+    {
+        if (g_pager.park_gone[c] || g_pager.park_in[c]) continue;
+        memcpy(list + LOADOUT_SLOTS + count++ * LOADOUT_SLOT, g_pager.park_state[c], LOADOUT_SLOT);
+    }
     Put32(list + LOADOUT_COUNT, count);
     g_load_assets(entry, stage, ack, by, extra);
     memset(list + LOADOUT_SLOTS + n * LOADOUT_SLOT, 0, (size_t)(count - n) * LOADOUT_SLOT);
@@ -1527,6 +1727,19 @@ static uint64_t Activate(uint64_t unused, uint64_t peer, uint32_t* armed, void* 
             if (!g_pager.gone[k] && Get32(g_pager.state[k]) == type && !g_pager.shown[k])
             {
                 if (SwitchPage(k / g_pager.per_page, "a stratagem in hand", 1) > 0)
+                {
+                    n = Get32(list + LOADOUT_COUNT);
+                    for (i = 0; i < n && EntryType(list, i) != type; i++) {}
+                }
+                break;
+            }
+    if (i >= n)
+        for (uint32_t c = 0; c < g_pager.parks; c++)
+            if (!g_pager.park_gone[c] && Get32(g_pager.park_state[c]) == type)
+            {
+                /* in hand since before it was parked: back in the list for its use (ParkAsk parks it again after) */
+                g_pager.park_want[c] = 1;
+                if (SwitchPage(g_pager.page, "a parked stratagem in hand", 1) > 0)
                 {
                     n = Get32(list + LOADOUT_COUNT);
                     for (i = 0; i < n && EntryType(list, i) != type; i++) {}
@@ -1798,9 +2011,39 @@ static void LogRows(const uint8_t* list)
     }
 }
 
+/* Asks the game about each parked entry, the way it asks about the list's own for the HUD rows, and from the same
+ * place (the HUD list's update): a copy of the local list that holds the parked entries instead. The game update
+ * (Tick) then puts them in the list or takes them out. Only while the list's update has someone to show, as the game's
+ * own rows are only then (it compares its third argument with a global first, 0x1834A1E: cmp r8d, [rip + ...]). */
+static void ParkAsk(uint32_t shown)
+{
+    static ULONGLONG last;
+    static uint8_t copy[LOADOUT_SIZE];
+    uint32_t parks = g_pager.parks;
+    if (!g_park_ok || !g_pager.active || parks == 0 || parks > GAME_LIST_MAX || !g_in_mission) return;
+    const uint8_t* cmp = (const uint8_t*)(game + RVA_LIST_UPDATE + 14);
+    int32_t disp;
+    memcpy(&disp, cmp + 3, 4);
+    if (shown == Get32(cmp + 7 + disp)) return;
+    ULONGLONG ms = GetTickCount64();
+    if (ms - last < PARK_EVERY_MS) return;
+    last = ms;
+    const uint8_t* list = LocalList();
+    const uint8_t* stratagems = *(const uint8_t* const*)(game + RVA_G_STRATAGEMS);
+    if (list == NULL || stratagems == NULL) return;
+    memcpy(copy, list, LOADOUT_SIZE);
+    memset(copy + LOADOUT_SLOTS, 0, GAME_LIST_MAX * LOADOUT_SLOT);
+    for (uint32_t c = 0; c < parks; c++) memcpy(copy + LOADOUT_SLOTS + c * LOADOUT_SLOT, g_pager.park_state[c], 8);
+    Put32(copy + LOADOUT_COUNT, parks);
+    for (uint32_t c = 0; c < parks; c++)
+        if (!g_pager.park_gone[c] && Get32(copy + LOADOUT_SLOTS + c * LOADOUT_SLOT) != 0)
+            g_pager.park_want[c] = g_available(stratagems, copy, c) != 0;
+}
+
 static void ListUpdate(uint8_t* list, float a, uint32_t b, float c)
 {
     g_list_update(list, a, b, c);
+    ParkAsk(b);
     if (list != NULL && list[HUD_LIST_OPEN] != 0) InterlockedExchange64(&g_list_seen, (LONG64)GetTickCount64());
     if (list != NULL && g_pager.active) LogRows(list);
     if (list == NULL || !g_label_ok) return;
@@ -1922,7 +2165,9 @@ static void Tick(HfMod* mod, float dt, void* user)
     /* What other mods (or the mission) added to the list since the last update: counted, taken into the pages, and if
      * the list is then fuller than a page allows, the page is put in again so the rows left free are free again (the
      * next addition needs them). Held back like any page change while a stratagem is coming in. */
-    if (g_pager.active && hf->game_state(self) == HF_STATE_MISSION)
+    int mission = hf->game_state(self) == HF_STATE_MISSION;
+    InterlockedExchange(&g_in_mission, mission);
+    if (g_pager.active && mission)
     {
         const uint8_t* now = LocalList();
         uint32_t n = now != NULL ? Get32(now + LOADOUT_COUNT) : 0;
@@ -1950,6 +2195,16 @@ static void Tick(HfMod* mod, float dt, void* user)
             g_refitting = 1;
             SwitchPage(g_pager.page, "room in the list", 0);
             g_refitting = 0;
+        }
+        /* A parked entry the game would show now goes in the list, one it would not goes out (see "parking"): the
+         * same page again, around them. Held back like any change of rows, and asked again. */
+        static ULONGLONG park_tried;
+        if (now != NULL && g_pager.active && g_pager.checked && ParkPending() && ms - park_tried >= PARK_EVERY_MS)
+        {
+            park_tried = ms;
+            g_refitting = g_park_refit = 1;
+            SwitchPage(g_pager.page, "a parked stratagem", 0);
+            g_refitting = g_park_refit = 0;
         }
     }
     int live = g_pager.active && g_pager.pages >= 2 && g_list_is_open &&
@@ -2300,12 +2555,24 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
                 eagles = 0; /* the log says why; the hooks made stay, and do nothing without g_eagles_ok */
         g_eagles_ok = eagles;
     }
+    /* parking asks in the label's hook and tells a loadout's stratagems by the Eagles' table */
+    int park = g_label_ok && g_eagles_ok;
+    for (uint32_t i = 0; i < PARK_CODE_COUNT && park; i++)
+        if (!hf->code_matches(game + kParkCode[i].rva, kParkCode[i].pattern))
+        {
+            hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: a mission's objective stratagems all stay "
+                    "in the list", kParkCode[i].name, kParkCode[i].rva);
+            park = 0;
+        }
+    if (park) g_available = (AvailableFn)(game + RVA_AVAILABLE);
+    g_park_ok = park;
     if (hf_on_game_thread(mod, Tick, NULL) != 0)
         hf->log(mod, "no game-thread update (HellForge too old?): the page keys do nothing; pages still change for a "
                 "stratagem in hand");
     else StartWheel();
-    hf->log(mod, "ready: %u stratagem slots, %u per row, page label %s, Eagles across pages %s, mouse wheel %s", g_slots,
-            g_per_row, g_label_ok ? "on" : "off", g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off");
+    hf->log(mod, "ready: %u stratagem slots, %u per row, page label %s, Eagles across pages %s, mouse wheel %s, parking "
+            "%s", g_slots, g_per_row, g_label_ok ? "on" : "off", g_eagles_ok ? "on" : "off",
+            g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off");
 }
 
 /* Taken out of the running game (or replaced): stop the wheel's thread, which the API doesn't know about. */
