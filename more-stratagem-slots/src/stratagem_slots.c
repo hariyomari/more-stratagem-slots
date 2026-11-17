@@ -416,6 +416,7 @@ static uint32_t g_key_prev = 'Q', g_key_next = 'E'; /* virtual-key codes */
 static int g_wheel_on = 1;        /* page_wheel: the mouse wheel changes pages too */
 static int g_page_hold = 1;       /* page_hold: no page change while a stratagem of the page is called in or in hand */
 static int g_page_added = 1;      /* page_added: loadout stratagems other mods add to the list go in the pages too */
+static int g_page_rearm = 1;      /* page_rearm: Eagle Rearm shows on every page, not only on those that hold an Eagle */
 static volatile LONG64 g_list_seen; /* GetTickCount64 when the list's update last saw it open */
 
 /* PickerInput's call in progress (its screen), and whether it set a slot (a pick, not the back button) */
@@ -1877,8 +1878,14 @@ static uint8_t EaglesSpent(uint8_t* unused, uint32_t player)
 static uint8_t EaglesUsed(uint8_t* unused, uint8_t* list)
 {
     uint8_t used = g_eagles_used(unused, list);
-    if (!used && g_pager.active && list != NULL && list == LocalList() && EagleLeft(1)) return 1;
-    return used;
+    if (used || !g_pager.active || list == NULL || list != LocalList() || !EagleLeft(1)) return used;
+    /* an Eagle on another page is below its full uses: Eagle Rearm shows (it is asked for that) on every page, or
+     * with page_rearm = off only on the pages that hold an Eagle, as in a list of the game's own */
+    if (g_page_rearm) return 1;
+    uint32_t n = Get32(list + LOADOUT_COUNT);
+    for (uint32_t i = 0; i < n && i < GAME_LIST_MAX; i++)
+        if (IsEagle(EntryType(list, i))) return 1;
+    return 0;
 }
 
 /* ---- the page label ---------------------------------------------------------------------------------------------- */
@@ -2339,7 +2346,11 @@ static const char kDefaultSettings[] =
     "# Stratagems that other mods add to your list during a mission (P.S.S. extras, for example) go in the pages after\r\n"
     "# your own (on). With off they stay on every page, which leaves less room for yours on each page. The mission's own\r\n"
     "# (Reinforce, Resupply, SOS Beacon, objective stratagems) are on every page either way.\r\n"
-    "page_added = on\r\n";
+    "page_added = on\r\n"
+    "\r\n"
+    "# Eagle Rearm shows on every page once an Eagle has spent a use, so you can rearm from any page (on). With off it\r\n"
+    "# shows only on the pages that hold an Eagle. Either way it rearms the Eagles on every page.\r\n"
+    "page_rearm = on\r\n";
 
 /* The file's path: the mod's folder is mods\<folder>, or deeper for a zip (mods\.unpacked\<zip>). */
 static int SettingsPath(char* path, size_t size, wchar_t* wide, int wide_count)
@@ -2434,12 +2445,13 @@ static void ReadSettings(void)
             int is_wheel = key_len == 10 && memcmp(line, "page_wheel", 10) == 0;
             int is_hold = key_len == 9 && memcmp(line, "page_hold", 9) == 0;
             int is_added = key_len == 10 && memcmp(line, "page_added", 10) == 0;
-            if (is_wheel || is_hold || is_added)
+            int is_rearm = key_len == 10 && memcmp(line, "page_rearm", 10) == 0;
+            if (is_wheel || is_hold || is_added || is_rearm)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
-                *(is_wheel ? &g_wheel_on : is_hold ? &g_page_hold : &g_page_added) = !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 ||
-                                                             _strnicmp(v, "false", 5) == 0 || *v == '0');
+                *(is_wheel ? &g_wheel_on : is_hold ? &g_page_hold : is_added ? &g_page_added : &g_page_rearm) =
+                    !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 || _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
             }
@@ -2456,8 +2468,8 @@ static void ReadSettings(void)
         line = end != NULL ? end + 1 : NULL;
     }
     hf->log(self, "read %s: slots = %u, per_row = %u (before limits), page keys 0x%02X / 0x%02X, page_wheel %s, "
-            "page_hold %s, page_added %s", path, g_slots, g_per_row, g_key_prev, g_key_next, g_wheel_on ? "on" : "off",
-            g_page_hold ? "on" : "off", g_page_added ? "on" : "off");
+            "page_hold %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev, g_key_next,
+            g_wheel_on ? "on" : "off", g_page_hold ? "on" : "off", g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
 }
 
 /* ---- start ------------------------------------------------------------------------------------------------------- */
