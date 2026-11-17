@@ -39,6 +39,14 @@ above four (default 8), for game build 25480438
   a report: keep the picked count well under that.
 - `Profile_SaveLoadout` (0x1751350) saves up to 32 slots into the profile, so extra slots are saved there too.
 
+### More notes
+
+- `audit-findings.md` (with `audit-part-a.md` and `audit-part-a-findings.md`): the game's lists of 16 and where they
+  are and are not checked. The reason for the pages.
+- `history-callers-findings.md`: the callers of the player history, for the 0.1.2 change that stopped hooking it.
+- `availability-findings.md`: when the game shows and takes a list entry (0x66C920), the input's matching, the HUD
+  list's order, and why the mod cannot change its settings file while the game runs. The reason for 0.1.4's parking.
+
 ## Test mod (not in this repository)
 
 Throwaway: hooks 0x18966A0 and appends four stratagems after the four picked, to check the mission side (HUD,
