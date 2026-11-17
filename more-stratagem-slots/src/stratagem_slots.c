@@ -2586,6 +2586,21 @@ static void FollowHand(ULONGLONG ms)
     }
 }
 
+/* The list is still the mission's: one of the game's entries it went to the mission with (Reinforce, Resupply...) is
+ * in it. When the mission ends the game puts the profile's loadout, picks only, in the same list, some seconds before
+ * it resets it and while the game's state is still the mission's. Those picks are the pages' own types, so the update
+ * took the list for a page too full and cut it down to one (seen in the logs up to 0.2.0's first build: 16 -> 14, and
+ * 16 -> 13 with another page's entries). Nothing was seen to go wrong after, but the list is not this mod's then. */
+static int MissionList(const uint8_t* list)
+{
+    uint32_t n = Get32(list + LOADOUT_COUNT);
+    if (g_pager.fixed == 0) return 1;
+    for (uint32_t i = 0; i < n && i < GAME_LIST_MAX; i++)
+        for (uint32_t j = 0; j < g_pager.fixed; j++)
+            if (EntryType(list, i) == g_pager.fixed_types[j]) return 1;
+    return 0;
+}
+
 /* The page keys and the wheel, while the list is open. */
 static void Tick(HfMod* mod, float dt, void* user)
 {
@@ -2601,7 +2616,19 @@ static void Tick(HfMod* mod, float dt, void* user)
      * next addition needs them). With page_lock = on, held back like any page change while a stratagem is coming in. */
     int mission = hf->game_state(self) == HF_STATE_MISSION;
     InterlockedExchange(&g_in_mission, mission);
-    if (g_pager.active && mission)
+    /* a list that is not the mission's (any more, or yet) is left as it is: no refit, no page change */
+    static int was_ours = 1;
+    const uint8_t* ours_list = g_pager.active && mission ? LocalList() : NULL;
+    int ours = ours_list != NULL && MissionList(ours_list);
+    if (ours_list != NULL && ours != was_ours)
+    {
+        was_ours = ours;
+        if (ours) LOG_ONCE(LOG_PAGE, "pages: the list is the mission's again");
+        else
+            LOG_ONCE(LOG_PAGE, "pages: none of the game's %u entries from ready-up are in the list (%u entries; the "
+                     "mission is over?): the list is left as it is", g_pager.fixed, Get32(ours_list + LOADOUT_COUNT));
+    }
+    if (g_pager.active && mission && ours)
     {
         const uint8_t* now = LocalList();
         uint32_t n = now != NULL ? Get32(now + LOADOUT_COUNT) : 0;
@@ -2642,7 +2669,7 @@ static void Tick(HfMod* mod, float dt, void* user)
             g_refitting = g_park_refit = 0;
         }
     }
-    int live = g_pager.active && g_pager.pages >= 2 && g_list_is_open &&
+    int live = g_pager.active && (!mission || ours) && g_pager.pages >= 2 && g_list_is_open &&
                (!g_label_ok || ms - (ULONGLONG)g_list_seen < WHEEL_LIVE_MS) && GameFocused();
     InterlockedExchange64(&g_wheel_until, live ? (LONG64)(ms + WHEEL_LIVE_MS) : 0);
     LONG wheel = InterlockedExchange(&g_wheel_steps, 0);
