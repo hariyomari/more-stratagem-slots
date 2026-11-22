@@ -6,6 +6,10 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 
 **Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and on the 0.5 nightly of 2026-11-16, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
 
+## Known incompatibilities
+
+- **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other.
+
 ## Installation
 
 1. Download the latest release from the [Releases](https://github.com/hariyomari/more-stratagem-slots/releases/latest) page.
