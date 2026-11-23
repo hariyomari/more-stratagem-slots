@@ -48,6 +48,7 @@
 #define RVA_OPEN_PICKER 0x146E9D0u    /* (screen): mode screen + 10264, target slot screen + 10268 = the focus */
 #define RVA_CLOSE_PICKER 0x146F3B0u   /* (screen, _) */
 #define RVA_PICKER_INPUT 0x146E0A0u   /* (screen, input): a pick in stratagem mode sets the slot, commits, advances */
+#define RVA_SCREEN_CARDS 0x1466AE2u   /* lea rsi, [rdi + 0x53A78]: the screen's cards (0x1EE18 each, the local one first) */
 #define RVA_STABLE_TO_TYPE 0x11F2490u
 #define RVA_PLAY_SOUND 0x1327F50u     /* (_, sound id) */
 #define RVA_INPUT_INDEX 0x585B80u     /* (action) -> index into the input state's 32-byte entries at +808 */
@@ -178,6 +179,7 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kCo
     { RVA_LOCAL_PEER_READ, "48 8B 05 B8 FC BD 01 48 8D 95 F0 02 00 00 48 8B 88 98 B3 00 00", "local player id" },
     { RVA_COPY_LOADOUT, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 66 0F 6F 05 ?? ?? "
       "?? ?? 48 8D 8A 50 01 00 00 48 8B 35 E0 AE 11 02", "player history copy" },
+    { RVA_SCREEN_CARDS, "48 8D B7 ?? ?? ?? ??", "loadout screen's cards" },
 };
 #define CODE_COUNT (sizeof kCode / sizeof kCode[0])
 
@@ -265,8 +267,8 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define CARD_PANEL 23416u
 #define SCREEN_PICKER_MODE 10264u   /* 10: stratagems */
 #define SCREEN_PICKER_SLOT 10268u
-#define SCREEN_PANEL0 366064u       /* the local card's panel: screen + 342648 + 23416 */
-#define SCREEN_CARD0_MODE 455312u   /* 0: the loadout panel (1: another view) */
+#define CARD_MODE 112664u           /* 0: the loadout panel (1: another view) */
+#define LEA_DISPLACEMENT 3u         /* a lea's 32-bit displacement after its REX, opcode and ModRM bytes */
 #define PICKER_STRATAGEMS 10u
 #define MODE_MOUSE 924372u
 #define MODE_VIRTUAL_CURSOR 924373u
@@ -614,13 +616,24 @@ static void PlaceSlots(Panel* p, int pick_row)
     node_set_position(p->panel + PANEL_BOOSTER, Vec2(booster_x, booster_y));
 }
 
+/* The screen's local card. Its place is read from the game's code at each use: a mod that makes room for more cards
+ * moves them and rewrites the code that addresses them, after this mod has started (Complex Operations' build for
+ * eight players puts them at screen + 0x2789A8). */
+static uint8_t* LocalCard(uint8_t* screen)
+{
+    int32_t offset;
+    memcpy(&offset, (const void*)(game + RVA_SCREEN_CARDS + LEA_DISPLACEMENT), 4);
+    return screen + offset;
+}
+
 /* The layout for the loadout screen's picker state: one row while it picks a stratagem, all of them otherwise. */
 static void SyncPickLayout(uint8_t* screen)
 {
-    Panel* p = FindPanel(screen + SCREEN_PANEL0);
+    uint8_t* card = LocalCard(screen);
+    Panel* p = FindPanel(card + CARD_PANEL);
     if (p == NULL || !p->built || g_rows == 0) return;
     int want = -1;
-    if (Get32(screen + SCREEN_PICKER_MODE) == PICKER_STRATAGEMS && Get32(screen + SCREEN_CARD0_MODE) == 0)
+    if (Get32(screen + SCREEN_PICKER_MODE) == PICKER_STRATAGEMS && Get32(card + CARD_MODE) == 0)
     {
         uint32_t target = Get32(screen + SCREEN_PICKER_SLOT);
         if (target < g_slots) want = (int)(target / g_per_row);
@@ -992,7 +1005,7 @@ static uint64_t Nav(uint8_t* panel, uint8_t* input, uint64_t unused, uint8_t nav
 static double OpenPicker(uint8_t* screen, uint64_t unused)
 {
     /* The focused extra slot from before the call: the open itself may touch the card's focus. */
-    Panel* p = FindPanel(screen + SCREEN_PANEL0);
+    Panel* p = FindPanel(LocalCard(screen) + CARD_PANEL);
     int focus = p != NULL && p->built ? p->focus : -1;
     double result = g_open_picker(screen, unused);
     if (focus >= 0 && Get32(screen + SCREEN_PICKER_MODE) == PICKER_STRATAGEMS)
@@ -1039,10 +1052,11 @@ static void SetSlot(uint8_t* card, uint32_t slot, uint32_t stable)
  * to an empty extra slot instead. Not the back button's close (no slot was set), nor another view of the card. */
 static uint64_t ClosePicker(uint8_t* screen, uint64_t unused)
 {
+    uint8_t* card = LocalCard(screen);
     if (screen == g_picking_screen && g_picked && Get32(screen + SCREEN_PICKER_MODE) == PICKER_STRATAGEMS &&
-        Get32(screen + SCREEN_CARD0_MODE) == 0)
+        Get32(card + CARD_MODE) == 0)
     {
-        Panel* p = FindPanel(screen + SCREEN_PANEL0);
+        Panel* p = FindPanel(card + CARD_PANEL);
         if (p != NULL && p->built)
             for (uint32_t k = 0; k < g_extra; k++)
             {
