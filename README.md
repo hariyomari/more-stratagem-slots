@@ -4,7 +4,11 @@
 
 A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to bring up to a maximum of 20 stratagems. It reuses the existing stratagem widget on the loadout screen for seamless selection.
 
-**Built and tested on HellForge 0.4.0-beta and on the 0.5 nightly of 2026-11-16, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+**Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and on the 0.5 nightly of 2026-11-16, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+
+## Known incompatibilities
+
+- **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other.
 
 ## Installation
 
@@ -69,7 +73,7 @@ From 0.2.0 wheel up is the next page and wheel down the previous one, the other 
 
 The file is created the first time the game starts with the mod switched on. If it is missing:
 
-1. Check on the launcher's Mods page that the mod is listed and switched on, and that your HellForge is up to date (the mod is tested on 0.4.0-beta and on the 0.5 nightly of 2026-11-16). If the mod didn't start, it can't create the file.
+1. Check on the launcher's Mods page that the mod is listed and switched on, and that your HellForge is up to date (the mod needs 0.4.0-beta or later, and is tested on 0.4.0-beta and on the 0.5 nightly of 2026-11-16). If the mod didn't start, it can't create the file.
 2. Or create it yourself: copy [`more-stratagem-slots.template.ini`](more-stratagem-slots/more-stratagem-slots.template.ini) (it is also inside the zip) into the `mods` folder and rename it to `more-stratagem-slots.ini`. The template holds the defaults.
 
 Don't edit the template where it is, or put the settings file inside the mod's folder: the mod only reads `mods\more-stratagem-slots.ini`.
