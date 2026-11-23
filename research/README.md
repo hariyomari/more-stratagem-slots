@@ -68,7 +68,9 @@ position `0x14476A0`, add child `0x144C5C0(parent, child)`). Nothing is heap-all
 
 - The lobby / loadout screen `S` holds 4 player cards at `S + 342648` (stride 126488). Each card's panel `P` is at
   `card + 23416` (so the local card's panel is `S + 366064`). `LoadoutScreen_CommitSlotsToLoadout(P, loadout)` is
-  called on that panel.
+  called on that panel. A mod may move the cards: Complex Operations' build for eight players puts 8 at
+  `S + 0x2789A8` and rewrites the code that addresses them, `lea rsi, [rdi + 0x53A78]` at 0x1466AE2 among it. The
+  mod reads that displacement at each use (`LocalCard`), after the other mod has patched it.
 - Panel layout (`LoadoutCard_BuildPanel` 0x1893F30, called once by `LoadoutCardOuter_Build` 0x1899430):
   - `P + 2136`: 7 equipment widgets (55x55), in `P + 272`, at x = 30 + i*(w + 5.8), y = -79.
   - `P + 35576`: the booster box (focus index 4).
