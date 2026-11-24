@@ -48,6 +48,9 @@ above four (default 8), for game build 25480438
   list's order, and why the mod cannot change its settings file while the game runs. The reason for 0.1.4's parking.
 - `page-change-findings.md`: what the game ties to a list row past the frame it reads it in (the in-hand record, the
   thrown ball, the HUD row's flash), and what it does not (a call-in). The reason 0.2.0's pages change at any time.
+- `loadout-fold-findings.md`: how the loadout card draws a plain rectangle and tests the cursor against a node, what
+  the card's input handler returns, when the cards are built, and what Dedicated Melee Slot hooks and where its pick
+  box goes. The reason for 0.3.0's fold strip.
 
 ## Test mod (not in this repository)
 
