@@ -318,6 +318,7 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define STRIP_HEIGHT (STRIP_FILL_HEIGHT + 2.0f * SLOT_INSET)
 #define STRIP_SIDE_GAP 6.0f      /* a slot's 16 px in 80, for the strip's 30 */
 #define STRIP_STEP 35.0f         /* how far the strip moves the rows up: its height and the 5 px between two slots */
+#define FOLD_SECONDS 0.1f        /* how long the rows take to open and to close */
 #define LAYER_CARD_FILL 12u
 #define LAYER_CARD_TEXT 14u
 #define LAYER_CARD_FRAME 15u
@@ -430,7 +431,8 @@ typedef struct
     int strip_hover;  /* the cursor is over the strip */
     uint32_t strip_column; /* the column the focus came down to the strip from, and goes back up to */
     int strip_look;   /* StripDraw: the colours it has (0 plain, 1 hovered, 2 focused), or -1 */
-    int laid_folded;  /* PlaceSlots: the fold it laid the slots out for */
+    float fold_pos;   /* how far the rows under the game's four are open, 0 to 1 (before easing): it follows the fold */
+    LONGLONG fold_tick; /* ... and its last step, by QueryPerformanceCounter; 0 while it is not moving */
 } Panel;
 
 static const HfApi* hf;
@@ -576,7 +578,9 @@ static Panel* AddPanel(uint8_t* panel)
     p->focus = p->hover = p->pick_row = -1;
     p->strip_ok = p->strip_focus = p->strip_hover = 0;
     p->strip_column = 0;
-    p->strip_look = p->laid_folded = -1;
+    p->strip_look = -1;
+    p->fold_pos = 1.0f;
+    p->fold_tick = 0;
     return p;
 }
 
@@ -592,11 +596,24 @@ static Panel* AddPanel(uint8_t* panel)
  * the loadout screen starts folded: LoadoutCard_BuildPanel runs once for each card of each screen (two visits in one
  * session built the cards twice, at new addresses), and it is the only code that zeroes the panel's shown loadout.
  * A panel lays its slots out for the fold in the hooks that are given it (SyncFold), never from the table: an entry
- * outlives its panel. Research: research/loadout-fold-findings.md. */
+ * outlives its panel.
+ * The rows open and close over FOLD_SECONDS: each panel has how far its rows are open (fold_pos), and SyncFold moves
+ * it towards the fold by the time that has passed and lays the panel out for it, every frame until it is there (the
+ * card's update calls the hover hook every frame). The game has tweens of its own for a node's place, size and
+ * alpha, but a tween holds its node until it ends, and the extra slots are not the game's to tear down.
+ * Research: research/loadout-fold-findings.md. */
 static void LabelText(uint8_t* node, const char* text);
 static void SyncFold(Panel* p);
+static int Locked(const uint8_t* widget);
 
 static int Folded(const Panel* p) { return p->strip_ok && g_folded; }
+
+/* How much of the rows under the game's four shows, 0 to 1: fold_pos eased at both ends (smoothstep, as the game
+ * eases the card's own change of size). A panel without a strip shows them all. */
+static float FoldOpen(const Panel* p)
+{
+    return p->strip_ok ? p->fold_pos * p->fold_pos * (3.0f - 2.0f * p->fold_pos) : 1.0f;
+}
 
 /* The strip's text and colours. The frame's are a slot widget's own, plain, hovered and focused, and so is how thick
  * it is (SlotWidget_ApplyState, which lays the frame out again after it too); the text takes the same colours. */
@@ -710,10 +727,11 @@ static void BuildExtras(Panel* p, const char* how)
     p->built = 1;
     p->failed = 0;
     p->focus = p->hover = p->pick_row = -1;
-    p->laid_folded = -1;
     LOG_ONCE(LOG_BUILD, "panel %p (%s): %u extra slots linked, UI context %llx", (void*)p->panel, how, g_extra,
              (unsigned long long)want);
     BuildStrip(p, want, how);
+    p->fold_pos = Folded(p) ? 0.0f : 1.0f; /* a new panel starts at its fold, without moving there */
+    p->fold_tick = 0;
 }
 
 /* The panel taller by the rows it shows under the game's four, and by the strip (the card's frame follows the panel's
@@ -723,7 +741,7 @@ static void FitPanel(Panel* p)
 {
     uint8_t* panel = p->panel;
     float want = PANEL_HEIGHT + (panel[PANEL_EXPANDED] ? PANEL_HEIGHT_EXPANDED : 0.0f) +
-                 (Folded(p) ? 0.0f : (float)g_rows * SLOT_PITCH) + (p->strip_ok ? STRIP_STEP : 0.0f);
+                 FoldOpen(p) * (float)g_rows * SLOT_PITCH + (p->strip_ok ? STRIP_STEP : 0.0f);
     float width, height;
     memcpy(&width, panel + NODE_SIZE_X, 4);
     memcpy(&height, panel + NODE_SIZE_Y, 4);
@@ -732,8 +750,11 @@ static void FitPanel(Panel* p)
 
 /* Where the slots go: the game's four (and the booster box) move up by the rows shown under them, and those rows take
  * their place and below; the UI's y grows upwards, from the panel's bottom. With a strip, it has the place at the
- * bottom and every row is STRIP_STEP higher; folded, the rows under the game's four go past the card's right edge,
- * where the card cuts them off.
+ * bottom and every row is STRIP_STEP higher; folded, the rows under the game's four go far to the right, out of sight.
+ * On the way between the two (FoldOpen) the game's four are a part of the way up, and a row under them is at its
+ * place once they have passed half of it, fading in until they have passed all of it: nothing cuts a row off, so it
+ * cannot slide out from behind the strip. The fade is the alpha of the widget's box, which SlotWidget_ApplyState
+ * sets too (1.0, or 0.5 for a locked slot) at each change of the slot's state; it is set here again at each step.
  * pick_row >= 0: the stratagem picker is open on a slot of that row. The card then shows one row, at the game's row's
  * usual place (the rest of the panel is behind the card's header): that row goes there, the others and the strip past
  * the card's right edge. */
@@ -741,23 +762,30 @@ static void FitPanel(Panel* p)
 static void PlaceSlots(Panel* p, int pick_row)
 {
     p->pick_row = pick_row;
-    p->laid_folded = Folded(p);
-    int shown = p->laid_folded ? 0 : (int)g_rows; /* rows under the game's four */
+    float open = FoldOpen(p) * (float)g_rows; /* rows under the game's four that have room, and a part of one */
     float base = SLOT_ORIGIN + (p->strip_ok ? STRIP_STEP : 0.0f);
     for (uint32_t slot = 0; slot < g_slots; slot++)
     {
         int row = (int)(slot / PER_ROW);
+        uint8_t* w = slot < GAME_SLOTS ? GameSlot(p->panel, slot) : Extra(p, slot - GAME_SLOTS);
         float x = SLOT_ORIGIN + (float)(slot % PER_ROW) * SLOT_PITCH;
-        float y = row <= shown ? base + (float)(shown - row) * SLOT_PITCH : base;
+        float y = base + (row == 0 ? open : (float)((int)g_rows - row)) * SLOT_PITCH;
+        float fade = 1.0f;
         if (pick_row >= 0)
         {
             if (row == pick_row) y = SLOT_ORIGIN;
             else x += HIDE_X;
         }
-        else if (row > shown) x += HIDE_X;
-        node_set_position(slot < GAME_SLOTS ? GameSlot(p->panel, slot) : Extra(p, slot - GAME_SLOTS), Vec2(x, y));
+        else if (row > 0)
+        {
+            fade = (open - (float)((int)g_rows - row)) * 2.0f - 1.0f;
+            fade = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+            if (fade == 0.0f) x += HIDE_X;
+        }
+        node_set_position(w, Vec2(x, y));
+        if (row > 0 && p->strip_ok) node_set_alpha(w, fade * (Locked(w) ? 0.5f : 1.0f));
     }
-    float booster_x = BOOSTER_X, booster_y = base + (float)shown * SLOT_PITCH;
+    float booster_x = BOOSTER_X, booster_y = base + open * SLOT_PITCH;
     if (pick_row >= 0)
     {
         if (pick_row == 0) booster_y = SLOT_ORIGIN;
@@ -909,11 +937,37 @@ static void UnfocusExtra(Panel* p)
     Put32(p->panel + PANEL_PREV_FOCUS, 0xFFFFFFFFu);
 }
 
-/* The panel's layout for the fold as it is now (see "the fold strip"). A slot that goes out of sight loses the focus. */
+/* The panel's rows a step further towards the fold as it is now, and its layout for that (see "the fold strip"): by
+ * the time since the last step, so the whole way takes FOLD_SECONDS at any frame rate. The first call after the fold
+ * changed only starts the clock (and the strip's text changes). While the picker has the card, the rows are not in
+ * their places anyway: there they are at the fold at once. A slot that goes out of sight loses the focus. */
 static void SyncFold(Panel* p)
 {
-    if (!p->built || !p->strip_ok || p->laid_folded == Folded(p)) return;
-    if (Folded(p) && p->focus >= 0) UnfocusExtra(p);
+    if (!p->built || !p->strip_ok) return;
+    float to = Folded(p) ? 0.0f : 1.0f;
+    if (p->fold_pos == to)
+    {
+        p->fold_tick = 0;
+        return;
+    }
+    if (to == 0.0f && p->focus >= 0) UnfocusExtra(p);
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (p->pick_row >= 0) p->fold_pos = to;
+    else if (p->fold_tick != 0)
+    {
+        static LONGLONG per_second;
+        if (per_second == 0)
+        {
+            LARGE_INTEGER frequency;
+            QueryPerformanceFrequency(&frequency);
+            per_second = frequency.QuadPart;
+        }
+        float step = (float)((double)(now.QuadPart - p->fold_tick) / (double)per_second) / FOLD_SECONDS;
+        if (to > p->fold_pos) p->fold_pos = p->fold_pos + step < to ? p->fold_pos + step : to;
+        else p->fold_pos = p->fold_pos - step > to ? p->fold_pos - step : to;
+    }
+    p->fold_tick = p->fold_pos == to ? 0 : now.QuadPart;
     PlaceSlots(p, p->pick_row);
 }
 
@@ -1070,7 +1124,6 @@ static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
     uint64_t result = g_hover(panel, unused, cursor_off);
     Panel* p = FindPanel(panel);
     if (p == NULL || !p->built) return result;
-    SyncFold(p);
     int mouse_path = !(InputModes()[MODE_VIRTUAL_CURSOR] || cursor_off);
     uint8_t* cursor = *(uint8_t**)(game + RVA_G_CURSOR) + CURSOR;
     p->hover = -1;
@@ -1095,6 +1148,7 @@ static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
             StripDraw(p);
         }
     }
+    SyncFold(p); /* after the tests: they set a slot's state, and with it its alpha */
     return result;
 }
 
