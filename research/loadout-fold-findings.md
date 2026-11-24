@@ -117,7 +117,7 @@ Read from its DLL (`melee_weapon_slot.dll`, MinGW, SDK 13) and its data patch.
   moment. The one session with two visits (HellForge release, 2026-11, 20 slots) has eight: four at 18:19:54 and
   four at 18:30:42, at other addresses. So each visit builds its cards anew, and a build is where the fold starts
   again.
-- The card's update (0x18C99F0) calls the hover function every frame for a card in the loadout view, so a hook on
+- The card's update (0x18999F0) calls the hover function every frame for a card in the loadout view, so a hook on
   it sees every live panel soon after the fold changes.
 
 ## What 0.3.0 does with this
@@ -141,6 +141,60 @@ Read from its DLL (`melee_weapon_slot.dll`, MinGW, SDK 13) and its data patch.
   the focus (the game's focus parked on its slot 4, as for an extra slot), select toggles, up goes back into the
   column, left and right leave the card.
 - The picker's move on to an empty extra slot unfolds, and the card stays unfolded when the picker closes.
+
+## Animating the fold (looked at on 2026-11-23, not built)
+
+The rows can open and close over a moment instead of at once, in two ways.
+
+### The game's own tweens
+
+- Every node can have a tween on its position, size, colour and alpha. The tweens are in one table of 2048 entries
+  of 112 bytes (the pointer at 0x347CD88: count and first free index, then the entries from + 16). A node's flags
+  say which of its properties has one (0x400000 position, 0x800000 size, 0x4000000 colour, 0x8000000 alpha), and
+  node + 168 and + 176 hold the entries' indices, 11 bits each.
+- Property numbers: 0 position (node + 4), 1 size (node + 12), 4 colour (node + 72), 5 alpha (node + 68); 2 and 6
+  are node + 28 and node + 164, not looked at.
+- To start one: position 0x1447440, size 0x1446DD0, colour 0x14483F0, alpha 0x1448870, all
+  `(node, target, seconds, kind, repeats, smooth, delay, curve*, curve_arg)`. Kind 0 runs once; 1 goes back and
+  forth; 2 to 6 are random flickers; a curve of four floats that are not all zero makes it kind 7. `smooth` 1 is
+  smoothstep, 0 linear. The game's calls: alpha `(node, 1.0 or 0.0, 0.2, 0, 0, 0, 0, &zeros, 0.0)` (0x1029000),
+  size `(node, size, 0.2, ?, 0, 1, 0, &zeros, 0.0)` (0x1294130).
+- There are wrappers that set at once when the time is 0 (0x144EAE0 size, 0x144EB50 position, 0x144EE10 colour),
+  and others with fewer arguments (0x1451BB0 size: `(node, from, to, smooth, seconds, delay, curve*)`).
+- The plain setters (set size, position, alpha, colour) end the property's tween.
+- The loadout card uses one itself: its update (0x18999F0) sizes the card's box and its background with 0x1451BB0
+  over 0.2 s, smooth, when the card changes between the stratagem panel and the equipment page, and does nothing
+  more until that tween has ended. So 0.2 s and smoothstep are the card's own pace.
+- The tick (0x12ECD50, every frame) goes through the table: it advances each tween (0x14397A0), writes the value
+  into the node, and marks the node and its parents (node + 224, node + 240) as changed.
+- So a tween holds its node, and reaches the node's parents, until it ends. The game's nodes are safe with that as
+  the game's own tweens are. The mod's (the extra slots, the strip) are in the mod's memory and are never torn down
+  by the game: if the loadout screen closes within a tween on one of them, the tick may walk from the mod's node to
+  a panel that is gone. How the game ends a node's tweens when a screen closes was not looked at.
+
+### From the mod, in the hover hook
+
+- The card's update calls the hover function every frame while the card shows its stratagem panel, and the hook is
+  given a live panel. So the mod can lay the panel out every frame for a moment after the fold changes: the panel's
+  height and the places of the game's four, the booster box and the rows, at a part of the way that it works out
+  from the time passed (QueryPerformanceCounter; smoothstep is one line).
+- No new game function. `PlaceSlots` already works out every place from the number of rows shown; it would take a
+  part of a row too.
+- The rows have nothing that cuts them off (the rows not shown are only moved far to the right), so a row cannot
+  slide out from behind the strip. It can stay at its place and fade in once the game's row has gone past it: alpha
+  on the widget's box. `SlotWidget_ApplyState` sets that alpha itself (1.0, or 0.5 for a slot that is greyed out) at
+  every change of state, so the mod sets it again each frame and calls `apply_state` when the fold has ended.
+- Each change of size or position marks the node as waiting for its layout, and such a node is not tested for the
+  cursor: the slots do not take hover for the moment the fold moves.
+- Dedicated Melee Slot's box is placed from the EQUIPMENT button every frame, so it moves with the card.
+- Not known: that the card's frame follows the panel's height every frame (it follows a change at once, in the
+  first session's screenshots), and how a faded slot looks (its images and its frame taking the box's alpha).
+
+### Which
+
+From the mod: about as much code as the strip's outline took, in one place, and nothing that outlives the hook.
+The game's tweens would be less code for each frame, but need three more functions of nine arguments checked and
+called, and an answer to what happens to a tween on a node of the mod's when the screen closes.
 
 ## The first session (2026-11-23, 0.5 nightly, 16 slots, with Dedicated Melee Slot)
 
