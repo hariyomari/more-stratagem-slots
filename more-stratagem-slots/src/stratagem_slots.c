@@ -61,12 +61,6 @@
 /* The game's limit of 16 */
 #define RVA_AUGMENT 0xB4EEC0u         /* (record): the game's systems append their entries after the picks (linked
                                          types like Eagle Rearm, mission stratagems...), unchecked */
-#define RVA_PROFILE_LOAD 0x17514C0u   /* (record) -> record: fills it from the profile at boot, but only up to 4 slots'
-                                       * cost (StratagemInfo+0xBC summed, 0x17521CD) and 16 entries */
-#define RVA_PROFILE_KEEP_A 0x11F507Bu   /* the return addresses of the load's two callers that keep the loadout; its */
-#define RVA_PROFILE_KEEP_B 0x1754122u   /* other three (0x10853B3, 0x1088CD0, 0x136BCEA) feed the player history */
-#define RVA_PROFILE_LOAD_PROFILE 0x17515E6u /* mov r14, [game + RVA_G_PROFILE]; cmp [r14 + 0x3C], dil */
-#define RVA_G_PROFILE 0x347CDD8u      /* pointer: the profile; +0x3C a loadout is saved, +0x4C 32 {stable id, uses} */
 #define RVA_BROADCAST_COMMIT 0x189D24Du /* LobbyCard_CommitAndBroadcast: lea rcx, [rbx + 0x5B78]; call commit (a local copy
                                          * it then packs into lists of 16, unchecked); returns to RVA_BROADCAST_RETURN */
 #define RVA_BROADCAST_RETURN 0x189D259u
@@ -167,8 +161,6 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kCo
     { RVA_AUGMENT, "48 89 5C 24 18 55 56 41 56 48 81 EC 60 06 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4", "loadout additions" },
     { RVA_HISTORY, "48 8B C4 48 89 58 08 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 D8 F5 FF FF 48 81 EC 80 0B 00 00",
       "player history" },
-    { RVA_PROFILE_LOAD, "48 89 5C 24 18 55 57 41 56 48 8D AC 24 C0 EB FF FF B8 40 15 00 00 E8", "profile loadout load" },
-    { RVA_PROFILE_LOAD_PROFILE, "4C 8B 35 EB B7 D2 01 41 38 7E 3C", "profile loadout load's profile" },
     { RVA_BROADCAST_COMMIT, "48 8D 8B 78 5B 00 00 E8 47 94 FF FF 48 8B 93 F0 ED 01 00", "lobby broadcast's commit" },
     { RVA_LOAD_ASSETS, "40 55 56 41 57 48 83 EC 30 48 8B F1 4C 89 4C 24 28 45 84 C0 4C 89 74 24 60 48 8D 0D",
       "player history load" },
@@ -296,11 +288,6 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define LOADOUT_MAX 32u
 #define LOADOUT_SIZE 2544u       /* the screen keeps its records 2544 bytes apart; the commit reads up to +0x9E8 */
 
-/* The profile */
-#define PROFILE_HAS_LOADOUT 0x3Cu /* u8: 0 means the game builds the default loadout instead */
-#define PROFILE_PAIRS 0x4Cu       /* 32 {u32 stable id, u32 uses}; the game skips a pair whose uses are 0 */
-#define PROFILE_PAIR_COUNT 32u
-
 #define STRATAGEM_TYPES 0x96u
 #define INFO_FLAGS 128u          /* the refresh shows a type only with bit 2 set here */
 
@@ -363,7 +350,6 @@ typedef uint8_t (*CursorOverFn)(uint8_t* cursor, uint8_t* node, uint64_t zero);
 typedef void (*ApplyStateFn)(uint8_t* widget);
 typedef uint8_t (*IsHoveredFn)(uint8_t* widget);
 typedef void (*AugmentFn)(uint8_t* record);
-typedef uint8_t* (*ProfileLoadFn)(uint8_t* record);
 typedef void (*LoadAssetsFn)(uint8_t* entry, uint32_t stage, uint8_t ack, uint64_t by, uint32_t extra);
 typedef uint64_t (*ActivateFn)(uint64_t unused, uint64_t peer, uint32_t* armed, void* where, uint8_t flag);
 typedef uint64_t (*ResetFn)(uint64_t unused, uint32_t peer, uint8_t preset, uint32_t group);
@@ -427,7 +413,6 @@ static CursorOverFn cursor_over;
 static ApplyStateFn apply_state;
 static IsHoveredFn is_hovered;
 static AugmentFn g_augment;
-static ProfileLoadFn g_profile_load;
 static LoadAssetsFn g_load_assets;
 static ActivateFn g_activate;
 static ResetFn g_reset;
@@ -475,10 +460,10 @@ static uint8_t g_scratch[LOADOUT_SIZE];
 static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra entries from before the game's wipe */
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
-enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PROFILE, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE,
-       LOG_ROWS, LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_KINDS };
+enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE, LOG_ROWS,
+       LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 16, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -1072,20 +1057,6 @@ static uint64_t ClosePicker(uint8_t* screen, uint64_t unused)
     uint64_t result = g_close_picker(screen, unused);
     SyncPickLayout(screen);
     return result;
-}
-
-/* ---- the game's limit of 16 -------------------------------------------------------------------------------------- */
-
-/* The types of a record's entries first..last-1, for the log. */
-static void TypeList(const uint8_t* record, uint32_t first, uint32_t last, char* out, size_t size)
-{
-    out[0] = 0;
-    for (uint32_t j = first; j < last && (size_t)lstrlenA(out) + 12 < size; j++)
-    {
-        char one[12];
-        wsprintfA(one, j > first ? " %u" : "%u", Get32(record + LOADOUT_SLOTS + j * LOADOUT_SLOT));
-        lstrcatA(out, one);
-    }
 }
 
 /* ---- pages ------------------------------------------------------------------------------------------------------- */
@@ -2360,7 +2331,7 @@ static uint8_t EaglesUsed(uint8_t* unused, uint8_t* list)
 typedef struct { uint8_t* list; uint8_t* node; int logged; } Label;
 static Label g_labels[LABEL_LISTS];
 static uint32_t g_label_next;
-static int g_label_ok;            /* the label's code matched */
+static int g_label_ok;            /* the label's code matched and its hook is in */
 
 static int Linked(const uint8_t* parent, const uint8_t* node)
 {
@@ -2768,10 +2739,22 @@ static int MissionList(const uint8_t* list)
     return 0;
 }
 
-/* The page keys and the wheel, while the list is open. */
+static int g_hook_tried; /* InstallHooks ran (once) */
+static int g_hooked;     /* the main hooks are in: Tick does its work */
+static void InstallHooks(HfMod* mod);
+
+/* The page keys and the wheel, while the list is open. Until then, waits for the game to reach the ship, where the
+ * hooks go in (see InstallHooks). */
 static void Tick(HfMod* mod, float dt, void* user)
 {
     (void)mod; (void)dt; (void)user;
+    if (!g_hooked)
+    {
+        uint32_t state = hf->game_state(self);
+        if (!g_hook_tried && state != HF_STATE_NONE && state != HF_STATE_SPLASH && state != HF_STATE_TITLE)
+            InstallHooks(self);
+        return;
+    }
     static int was_prev, was_next;
     int prev = (GetAsyncKeyState((int)g_key_prev) & 0x8000) != 0, next = (GetAsyncKeyState((int)g_key_next) & 0x8000) != 0;
     int press_prev = prev && !was_prev, press_next = next && !was_next;
@@ -2851,78 +2834,6 @@ static void Tick(HfMod* mod, float dt, void* user)
     uint32_t to = step > 0 ? (g_pager.page + 1) % g_pager.pages : (g_pager.page + g_pager.pages - 1) % g_pager.pages;
     if (SwitchPage(to, why, 0) > 0) play_sound(0, SOUND_MOVE);
     else InterlockedExchange(&g_wheel_steps, 0); /* held back: drop the rest of the wheel's steps */
-}
-
-/* ---- the profile ------------------------------------------------------------------------------------------------- */
-
-/* At boot the game loads the loadout from the profile, but stops once the slots' cost comes to 4: the extra slots,
- * saved with the rest, came back empty after a restart. The profile's pairs are in slot order, so after the game's
- * load the picks are filled again from all of them, up to the slot setting, the way the game reads a pair (uses 0 is
- * an empty pair, an unknown stable id is skipped). Only when the game's own picks are the first of those: anything
- * else is a choice of the game's this mod does not know, and it is left as it is.
- *
- * The game calls the load from five places. Three hand a copy of the result straight to the player history
- * (0x13620A0: host start, join, the end of the profile's loading), whose lists take 16 and no more: for those, and
- * for a caller this mod does not know, the picks stop at 16. Only the two that keep the loadout get every slot. (A
- * hook on the player history did this before; it changed code that HD2 Transmog checks, which switched its Custom
- * Variants off.) */
-static uint8_t* ProfileLoad(uint8_t* record)
-{
-    uintptr_t from = (uintptr_t)__builtin_return_address(0) - (uintptr_t)game;
-    uint8_t* result = g_profile_load(record);
-    const uint8_t* profile = *(const uint8_t* const*)(game + RVA_G_PROFILE);
-    if (record == NULL || profile == NULL || profile[PROFILE_HAS_LOADOUT] == 0) return result;
-    uint32_t loaded = Get32(record + LOADOUT_COUNT);
-    if (loaded > LOADOUT_MAX) return result;
-
-    uint32_t limit = g_slots;
-    if (limit > GAME_LIST_MAX)
-    {
-        if (from == RVA_PROFILE_KEEP_A || from == RVA_PROFILE_KEEP_B)
-            LOG_ONCE(LOG_PROFILE, "profile load for 0x%llX: every slot", (unsigned long long)from);
-        else
-        {
-            limit = GAME_LIST_MAX;
-            LOG_ONCE(LOG_PROFILE, "profile load for 0x%llX: the first 16 picks at most (the player history's limit)",
-                     (unsigned long long)from);
-        }
-    }
-
-    uint32_t types[MAX_SLOTS], uses[MAX_SLOTS], n = 0;
-    for (uint32_t i = 0; i < PROFILE_PAIR_COUNT && n < limit; i++)
-    {
-        const uint8_t* pair = profile + PROFILE_PAIRS + i * 8u;
-        uint32_t stable = Get32(pair), use = Get32(pair + 4);
-        if (use == 0) continue;
-        uint32_t type = stable_to_type(stable);
-        if (type == 0) continue;
-        types[n] = type;
-        uses[n++] = use;
-    }
-    if (n <= loaded) return result;
-
-    char game_list[LOADOUT_MAX * 12];
-    TypeList(record, 0, loaded, game_list, sizeof game_list);
-    for (uint32_t j = 0; j < loaded; j++)
-        if (Get32(record + LOADOUT_SLOTS + j * LOADOUT_SLOT) != types[j])
-        {
-            LOG_ONCE(LOG_PROFILE, "profile load: the game loaded types %s, not the profile's first %u in order; left as "
-                     "the game loaded it", game_list, loaded);
-            return result;
-        }
-    for (uint32_t j = loaded; j < n; j++)
-    {
-        uint8_t* entry = record + LOADOUT_SLOTS + j * LOADOUT_SLOT;
-        memset(entry, 0, LOADOUT_SLOT);
-        Put32(entry, types[j]);
-        Put32(entry + 4, uses[j]);
-    }
-    Put32(record + LOADOUT_COUNT, n);
-    char added[LOADOUT_MAX * 12];
-    TypeList(record, loaded, n, added, sizeof added);
-    LOG_ONCE(LOG_PROFILE, "profile load: the game loaded %u (types %s); added the profile's next %u (types %s)", loaded,
-             game_list, n - loaded, added);
-    return result;
 }
 
 /* ---- settings ---------------------------------------------------------------------------------------------------- */
@@ -3099,6 +3010,79 @@ static void ReadSettings(void)
 
 /* ---- start ------------------------------------------------------------------------------------------------------- */
 
+/* What the game-loaded event found: which optional parts' code matched. Their hooks go in later, with the rest. */
+static int g_label_code, g_eagle_code, g_follow_code, g_ball_code, g_park_code;
+static int g_ticking;    /* Tick is registered */
+
+/* Every hook, in one go. Not in the game-loaded event: HellForge sends that event to the mods one after another on its
+ * watch thread, beside the game, and only after the last one moves the game's projectile list to where the projectiles
+ * mods added are. Each hook takes 30-90 ms (the game's threads are stopped for it), so this mod's took 0.7-2 s there,
+ * and on a slow PC the game reached the title screen first and read an added projectile from the old list (issue #7).
+ * None of these is needed before the ship: the loadout screen, ready-up and the mission come after it. */
+static void InstallHooks(HfMod* mod)
+{
+    g_hook_tried = 1;
+    ULONGLONG started = GetTickCount64();
+    /* The guards on the game's limit of 16 first, then the commit, so the record keeps its extra slots from the first
+     * refresh on. */
+    static const struct { uint32_t rva; void* detour; void** original; } hooks[] = {
+        { RVA_AUGMENT, (void*)Augment, (void**)&g_augment },
+        { RVA_RESET, (void*)Reset, (void**)&g_reset },
+        { RVA_LOAD_ASSETS, (void*)LoadAssets, (void**)&g_load_assets },
+        { RVA_ACTIVATE, (void*)Activate, (void**)&g_activate },
+        { RVA_LIST_OPEN, (void*)ListOpen, (void**)&g_list_open },
+        { RVA_COPY_LOADOUT, (void*)CopyLoadout, (void**)&g_copy_loadout },
+        { RVA_COMMIT, (void*)Commit, (void**)&g_commit },
+        { RVA_BUILD_PANEL, (void*)BuildPanel, (void**)&g_build_panel },
+        { RVA_REFRESH, (void*)Refresh, (void**)&g_refresh },
+        { RVA_SET_FOCUS, (void*)HookSetFocus, (void**)&g_set_focus },
+        { RVA_SET_SLOT, (void*)SetSlot, (void**)&g_set_slot },
+        { RVA_PICKER_INPUT, (void*)PickerInput, (void**)&g_picker_input },
+        { RVA_CLOSE_PICKER, (void*)ClosePicker, (void**)&g_close_picker },
+        { RVA_OPEN_PICKER, (void*)OpenPicker, (void**)&g_open_picker },
+        { RVA_HOVER, (void*)Hover, (void**)&g_hover },
+        { RVA_NAV, (void*)Nav, (void**)&g_nav },
+    };
+    for (uint32_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++)
+        if (hf->hook(mod, game + hooks[i].rva, hooks[i].detour, hooks[i].original) != 0) return; /* the log says why */
+    g_label_ok = g_label_code &&
+                 hf->hook(mod, game + RVA_LIST_UPDATE, (void*)ListUpdate, (void**)&g_list_update) == 0;
+    int eagles = g_eagle_code;
+    if (eagles)
+    {
+        static const struct { uint32_t rva; void* detour; void** original; } eagle_hooks[] = {
+            { RVA_COOLDOWN, (void*)Cooldown, (void**)&g_cooldown },
+            { RVA_COOLDOWN_SYSTEMS, (void*)CooldownSystems, (void**)&g_cooldown_systems },
+            { RVA_EAGLES_SPENT, (void*)EaglesSpent, (void**)&g_eagles_spent },
+            { RVA_EAGLES_USED, (void*)EaglesUsed, (void**)&g_eagles_used },
+        };
+        for (uint32_t i = 0; i < sizeof eagle_hooks / sizeof eagle_hooks[0] && eagles; i++)
+            if (hf->hook(mod, game + eagle_hooks[i].rva, eagle_hooks[i].detour, eagle_hooks[i].original) != 0)
+                eagles = 0; /* the log says why; the hooks made stay, and do nothing without g_eagles_ok */
+        g_eagles_ok = eagles;
+    }
+    /* following a stratagem in hand reads the in-hand records the Eagles' code finds, and writes their row */
+    g_follow_ok = g_eagles_ok && g_follow_code;
+    if (!g_follow_ok && !g_page_lock)
+        hf->log(mod, "page_lock = off, but the pages can't follow a stratagem in hand here: they are locked while one is "
+                "in hand or being called in");
+    int ball = g_follow_ok && g_ball_code &&
+               hf->hook(mod, game + RVA_BALL_ENDED, (void*)BallEnded, (void**)&g_ball_ended) == 0; /* the log says why */
+    /* parking asks in the label's hook and tells a loadout's stratagems by the Eagles' table */
+    g_park_ok = g_label_ok && g_eagles_ok && g_park_code;
+    if (g_park_ok) g_available = (AvailableFn)(game + RVA_AVAILABLE);
+    if (g_ticking) StartWheel();
+    g_hooked = 1;
+    hf->log(mod, "ready (hooks in after %u ms): %u stratagem slots, %u per row, page label %s, Eagles across pages %s, "
+            "mouse wheel %s, parking %s, pages %s, thrown stratagem's end %s",
+            (unsigned)(GetTickCount64() - started), g_slots, g_per_row, g_label_ok ? "on" : "off",
+            g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off",
+            Following() ? "follow a stratagem in hand" : "locked while a stratagem is in hand or being called in",
+            ball ? "hooked" : "not hooked");
+}
+
+/* The game's code is ready: check it, and leave the hooks for the ship (InstallHooks). Only reads here, so HellForge's
+ * watch thread moves on at once. */
 static void GameLoaded(HfMod* mod, HfEvent event, void* user)
 {
     (void)event; (void)user;
@@ -3127,38 +3111,15 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
     apply_state = (ApplyStateFn)(game + RVA_APPLY_STATE);
     is_hovered = (IsHoveredFn)(game + RVA_IS_HOVERED);
 
-    /* The guards on the game's limit of 16 first, then the commit, so the record keeps its extra slots from the first
-     * refresh on. */
-    static const struct { uint32_t rva; void* detour; void** original; } hooks[] = {
-        { RVA_AUGMENT, (void*)Augment, (void**)&g_augment },
-        { RVA_RESET, (void*)Reset, (void**)&g_reset },
-        { RVA_LOAD_ASSETS, (void*)LoadAssets, (void**)&g_load_assets },
-        { RVA_ACTIVATE, (void*)Activate, (void**)&g_activate },
-        { RVA_LIST_OPEN, (void*)ListOpen, (void**)&g_list_open },
-        { RVA_COPY_LOADOUT, (void*)CopyLoadout, (void**)&g_copy_loadout },
-        { RVA_PROFILE_LOAD, (void*)ProfileLoad, (void**)&g_profile_load },
-        { RVA_COMMIT, (void*)Commit, (void**)&g_commit },
-        { RVA_BUILD_PANEL, (void*)BuildPanel, (void**)&g_build_panel },
-        { RVA_REFRESH, (void*)Refresh, (void**)&g_refresh },
-        { RVA_SET_FOCUS, (void*)HookSetFocus, (void**)&g_set_focus },
-        { RVA_SET_SLOT, (void*)SetSlot, (void**)&g_set_slot },
-        { RVA_PICKER_INPUT, (void*)PickerInput, (void**)&g_picker_input },
-        { RVA_CLOSE_PICKER, (void*)ClosePicker, (void**)&g_close_picker },
-        { RVA_OPEN_PICKER, (void*)OpenPicker, (void**)&g_open_picker },
-        { RVA_HOVER, (void*)Hover, (void**)&g_hover },
-        { RVA_NAV, (void*)Nav, (void**)&g_nav },
-    };
-    for (uint32_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++)
-        if (hf->hook(mod, game + hooks[i].rva, hooks[i].detour, hooks[i].original) != 0) return; /* the log says why */
-    g_label_ok = 1;
-    for (uint32_t i = 0; i < LABEL_CODE_COUNT && g_label_ok; i++)
+    g_label_code = 1;
+    for (uint32_t i = 0; i < LABEL_CODE_COUNT && g_label_code; i++)
         if (!hf->code_matches(game + kLabelCode[i].rva, kLabelCode[i].pattern))
         {
             hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: no page label (the pages still work)",
                     kLabelCode[i].name, kLabelCode[i].rva);
-            g_label_ok = 0;
+            g_label_code = 0;
         }
-    if (g_label_ok)
+    if (g_label_code)
     {
         text_init = (NodeFn)(game + RVA_TEXT_INIT);
         text_font = (TextFontFn)(game + RVA_TEXT_FONT);
@@ -3169,70 +3130,47 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
         node_set_alpha = (NodeSetAlphaFn)(game + RVA_NODE_SET_ALPHA);
         node_set_color = (NodeSetColorFn)(game + RVA_NODE_SET_COLOR);
         node_set_visible = (NodeSetVisibleFn)(game + RVA_NODE_SET_VISIBLE);
-        if (hf->hook(mod, game + RVA_LIST_UPDATE, (void*)ListUpdate, (void**)&g_list_update) != 0) g_label_ok = 0;
     }
-    int eagles = 1;
-    for (uint32_t i = 0; i < EAGLE_CODE_COUNT && eagles; i++)
+    g_eagle_code = 1;
+    for (uint32_t i = 0; i < EAGLE_CODE_COUNT && g_eagle_code; i++)
         if (!hf->code_matches(game + kEagleCode[i].rva, kEagleCode[i].pattern))
         {
             hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: Eagle Rearm reaches only the page shown, "
                     "and pages change during a call-in", kEagleCode[i].name, kEagleCode[i].rva);
-            eagles = 0;
+            g_eagle_code = 0;
         }
-    if (eagles)
-    {
-        static const struct { uint32_t rva; void* detour; void** original; } eagle_hooks[] = {
-            { RVA_COOLDOWN, (void*)Cooldown, (void**)&g_cooldown },
-            { RVA_COOLDOWN_SYSTEMS, (void*)CooldownSystems, (void**)&g_cooldown_systems },
-            { RVA_EAGLES_SPENT, (void*)EaglesSpent, (void**)&g_eagles_spent },
-            { RVA_EAGLES_USED, (void*)EaglesUsed, (void**)&g_eagles_used },
-        };
-        for (uint32_t i = 0; i < sizeof eagle_hooks / sizeof eagle_hooks[0] && eagles; i++)
-            if (hf->hook(mod, game + eagle_hooks[i].rva, eagle_hooks[i].detour, eagle_hooks[i].original) != 0)
-                eagles = 0; /* the log says why; the hooks made stay, and do nothing without g_eagles_ok */
-        g_eagles_ok = eagles;
-    }
-    /* following a stratagem in hand reads the in-hand records the Eagles' code finds, and writes their row */
-    int follow = g_eagles_ok;
-    for (uint32_t i = 0; i < HAND_CODE_COUNT && follow; i++)
+    g_follow_code = g_eagle_code;
+    for (uint32_t i = 0; i < HAND_CODE_COUNT && g_follow_code; i++)
         if (!hf->code_matches(game + kHandCode[i].rva, kHandCode[i].pattern))
         {
             hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: pages can't change while a stratagem is in "
                     "hand or being called in", kHandCode[i].name, kHandCode[i].rva);
-            follow = 0;
+            g_follow_code = 0;
         }
-    g_follow_ok = follow;
-    if (!follow && !g_page_lock)
-        hf->log(mod, "page_lock = off, but the pages can't follow a stratagem in hand here: they are locked while one is "
-                "in hand or being called in");
-    int ball = follow;
-    if (ball && !hf->code_matches(game + RVA_BALL_ENDED, kBallEndedCode))
+    g_ball_code = g_follow_code;
+    if (g_ball_code && !hf->code_matches(game + RVA_BALL_ENDED, kBallEndedCode))
     {
         hf->log(mod, "the game's thrown stratagem's end (0x%X) is not the code this mod knows: one that ends without an "
                 "activation after a page change marks another row for 2 s", RVA_BALL_ENDED);
-        ball = 0;
+        g_ball_code = 0;
     }
-    if (ball && hf->hook(mod, game + RVA_BALL_ENDED, (void*)BallEnded, (void**)&g_ball_ended) != 0) ball = 0; /* the log says why */
-    /* parking asks in the label's hook and tells a loadout's stratagems by the Eagles' table */
-    int park = g_label_ok && g_eagles_ok;
-    for (uint32_t i = 0; i < PARK_CODE_COUNT && park; i++)
+    g_park_code = g_label_code && g_eagle_code;
+    for (uint32_t i = 0; i < PARK_CODE_COUNT && g_park_code; i++)
         if (!hf->code_matches(game + kParkCode[i].rva, kParkCode[i].pattern))
         {
             hf->log(mod, "the game's %s (0x%X) is not the code this mod knows: a mission's objective stratagems all stay "
                     "in the list", kParkCode[i].name, kParkCode[i].rva);
-            park = 0;
+            g_park_code = 0;
         }
-    if (park) g_available = (AvailableFn)(game + RVA_AVAILABLE);
-    g_park_ok = park;
     if (hf_on_game_thread(mod, Tick, NULL) != 0)
+    {
         hf->log(mod, "no game-thread update (HellForge too old?): the page keys do nothing; pages still change for a "
-                "stratagem in hand");
-    else StartWheel();
-    hf->log(mod, "ready: %u stratagem slots, %u per row, page label %s, Eagles across pages %s, mouse wheel %s, parking "
-            "%s, pages %s, thrown stratagem's end %s", g_slots, g_per_row, g_label_ok ? "on" : "off",
-            g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off",
-            Following() ? "follow a stratagem in hand" : "locked while a stratagem is in hand or being called in",
-            ball ? "hooked" : "not hooked");
+                "stratagem in hand. The hooks go in now");
+        InstallHooks(mod);
+        return;
+    }
+    g_ticking = 1;
+    hf->log(mod, "the game's code is the one this mod knows; its hooks go in when the game first reaches the ship");
 }
 
 /* Taken out of the running game (or replaced): stop the wheel's thread, which the API doesn't know about. */
