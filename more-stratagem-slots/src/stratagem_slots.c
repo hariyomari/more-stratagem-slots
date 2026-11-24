@@ -318,7 +318,7 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define STRIP_HEIGHT (STRIP_FILL_HEIGHT + 2.0f * SLOT_INSET)
 #define STRIP_SIDE_GAP 6.0f      /* a slot's 16 px in 80, for the strip's 30 */
 #define STRIP_STEP 35.0f         /* how far the strip moves the rows up: its height and the 5 px between two slots */
-#define FOLD_SECONDS 0.1f        /* how long the rows take to open and to close */
+#define FOLD_SECONDS 0.15f       /* how long the rows take to open and to close (collapse_animate) */
 #define LAYER_CARD_FILL 12u
 #define LAYER_CARD_TEXT 14u
 #define LAYER_CARD_FRAME 15u
@@ -441,6 +441,7 @@ static uintptr_t game;
 static uint32_t g_slots = 8, g_extra = 4;
 static int g_fold_set = 1;        /* collapse: loadouts of many rows have the fold strip */
 static uint32_t g_fold_rows = 3;  /* collapse_rows: ... those of this many rows or more */
+static int g_fold_animate = 1;    /* collapse_animate: the rows open and close over FOLD_SECONDS, not at once */
 static int g_fold_on;             /* ... and this one has, and the strip's code matched */
 static int g_frame_on;            /* ... and its outline's */
 static int g_folded = 1;          /* the rows under the game's four are hidden: on every card, from each screen's build */
@@ -597,10 +598,11 @@ static Panel* AddPanel(uint8_t* panel)
  * session built the cards twice, at new addresses), and it is the only code that zeroes the panel's shown loadout.
  * A panel lays its slots out for the fold in the hooks that are given it (SyncFold), never from the table: an entry
  * outlives its panel.
- * The rows open and close over FOLD_SECONDS: each panel has how far its rows are open (fold_pos), and SyncFold moves
- * it towards the fold by the time that has passed and lays the panel out for it, every frame until it is there (the
- * card's update calls the hover hook every frame). The game has tweens of its own for a node's place, size and
- * alpha, but a tween holds its node until it ends, and the extra slots are not the game's to tear down.
+ * The rows open and close over FOLD_SECONDS, unless collapse_animate is off: each panel has how far its rows are open
+ * (fold_pos), and SyncFold moves it towards the fold by the time that has passed and lays the panel out for it, every
+ * frame until it is there (the card's update calls the hover hook every frame). The game has tweens of its own for a
+ * node's place, size and alpha, but a tween holds its node until it ends, and the extra slots are not the game's to
+ * tear down.
  * Research: research/loadout-fold-findings.md. */
 static void LabelText(uint8_t* node, const char* text);
 static void SyncFold(Panel* p);
@@ -940,7 +942,8 @@ static void UnfocusExtra(Panel* p)
 /* The panel's rows a step further towards the fold as it is now, and its layout for that (see "the fold strip"): by
  * the time since the last step, so the whole way takes FOLD_SECONDS at any frame rate. The first call after the fold
  * changed only starts the clock (and the strip's text changes). While the picker has the card, the rows are not in
- * their places anyway: there they are at the fold at once. A slot that goes out of sight loses the focus. */
+ * their places anyway: there they are at the fold at once, as they always are with collapse_animate off. A slot that
+ * goes out of sight loses the focus. */
 static void SyncFold(Panel* p)
 {
     if (!p->built || !p->strip_ok) return;
@@ -953,7 +956,7 @@ static void SyncFold(Panel* p)
     if (to == 0.0f && p->focus >= 0) UnfocusExtra(p);
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    if (p->pick_row >= 0) p->fold_pos = to;
+    if (p->pick_row >= 0 || !g_fold_animate) p->fold_pos = to;
     else if (p->fold_tick != 0)
     {
         static LONGLONG per_second;
@@ -3144,9 +3147,11 @@ static const char kDefaultSettings[] =
     "slots = 8\r\n"
     "\r\n"
     "# Loadout screen: a loadout of collapse_rows rows of four or more (2 to 5) shows its first row, and a bar that\r\n"
-    "# shows and hides the others. With collapse off, every row always shows.\r\n"
+    "# shows and hides the others. With collapse off, every row always shows. With collapse_animate off, the rows\r\n"
+    "# show and hide at once.\r\n"
     "collapse = on\r\n"
     "collapse_rows = 3\r\n"
+    "collapse_animate = on\r\n"
     "\r\n"
     "# Keys for the previous and next page, while the stratagem list is open: a letter, a digit, or a Windows\r\n"
     "# virtual-key code.\r\n"
@@ -3267,12 +3272,13 @@ static void ReadSettings(void)
             if (key_len == 7 && memcmp(line, "per_row", 7) == 0) old_per_row = 1;
             int is_invert = key_len == 17 && memcmp(line, "page_wheel_invert", 17) == 0;
             int is_fold = key_len == 8 && memcmp(line, "collapse", 8) == 0;
-            if (is_wheel || is_lock || is_added || is_rearm || is_invert || is_fold)
+            int is_animate = key_len == 16 && memcmp(line, "collapse_animate", 16) == 0;
+            if (is_wheel || is_lock || is_added || is_rearm || is_invert || is_fold || is_animate)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
                 *(is_wheel ? &g_wheel_on : is_lock ? &g_page_lock : is_added ? &g_page_added : is_rearm ? &g_page_rearm :
-                  is_fold ? &g_fold_set : &g_wheel_invert) =
+                  is_fold ? &g_fold_set : is_animate ? &g_fold_animate : &g_wheel_invert) =
                     !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 || _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
@@ -3289,9 +3295,10 @@ static void ReadSettings(void)
         }
         line = end != NULL ? end + 1 : NULL;
     }
-    hf->log(self, "read %s: slots = %u, collapse_rows = %u (before limits), collapse %s, page keys 0x%02X / 0x%02X, "
+    hf->log(self, "read %s: slots = %u, collapse_rows = %u (before limits), collapse %s, collapse_animate %s, "
+            "page keys 0x%02X / 0x%02X, "
             "page_wheel %s, page_wheel_invert %s, page_lock %s, page_added %s, page_rearm %s", path, g_slots,
-            g_fold_rows, g_fold_set ? "on" : "off", g_key_prev,
+            g_fold_rows, g_fold_set ? "on" : "off", g_fold_animate ? "on" : "off", g_key_prev,
             g_key_next, g_wheel_on ? "on" : "off", g_wheel_invert ? "on" : "off", g_page_lock ? "on" : "off",
             g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
     if (old_hold)
