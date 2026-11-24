@@ -1,9 +1,10 @@
 /* More Stratagem Slots: more than four stratagem slots in the HELLDIVERS 2 loadout.
  *
- * Loadout: every loadout card shows slots 5..N beside (or under) the game's four, filled from the loadout record, and
- * the loadout screen's commit keeps them in the record with the uses the game itself computes. So a loadout of more
- * than four shows, saves and goes into the mission.
- * Picking: the extra slots take focus (controller/keyboard: right from the booster box; mouse: hover and click), the
+ * Loadout: every loadout card shows slots 5..N in rows of four under the game's four, filled from the loadout record,
+ * and the loadout screen's commit keeps them in the record with the uses the game itself computes. So a loadout of more
+ * than four shows, saves and goes into the mission. A loadout of many rows starts folded: the game's row only, and a
+ * strip under it that shows the other rows and hides them again. See "the fold strip".
+ * Picking: the extra slots take focus (controller/keyboard: down from the game's four; mouse: hover and click), the
  * picker opens on them and writes into them, and after a pick the picker moves on to an empty extra slot once the
  * game's four are full. The game's own focus index never leaves the values it knows (0-11): an extra slot's focus is
  * this mod's, with the game's focus parked on slot 4 (index 3) so the picker opens in stratagem mode, and the picker's
@@ -36,6 +37,9 @@
 #define RVA_NODE_SET_ANCHOR 0x144F0D0u
 #define RVA_NODE_ADD_CHILD 0x144C5C0u
 #define RVA_NODE_SET_SIZE 0x1447160u
+#define RVA_NODE_INIT 0x1446840u      /* UiNode_Init(node, kind): 1 a box of 272 bytes, 5 a filled rectangle of 280 */
+#define RVA_FRAME_INIT 0x17909F0u     /* (frame, layer): the outline of a slot widget, a box of six images (2456 bytes) */
+#define RVA_FRAME_LAYOUT 0x1791380u   /* (frame): sizes its images for the frame's size, thickness and side gap */
 #define RVA_SPECIAL_MODE 0x11DF110u /* the refresh skips types 77 and 90 while this is true */
 #define RVA_STRATAGEM_INFO 0x37CB600u /* StratagemInfo* [type] */
 #define RVA_G_STRATAGEM_ROWS 0x348E3FCu /* u32: the info rows the game loaded (149). With mods' stratagems HellForge
@@ -192,6 +196,15 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kLa
 };
 #define LABEL_CODE_COUNT (sizeof kLabelCode / sizeof kLabelCode[0])
 
+/* The fold strip's code (with the label's, whose text node it uses): without it every row always shows. */
+static const char kNodeInitCode[] = "48 89 5C 24 10 57 48 83 EC 20 0F 28 05 ?? ?? ?? ?? 33 FF 4C 8B 05 ?? ?? ?? ?? 48 8B D9 0F "
+                                    "11 41";
+/* ... and its outline's: without it the strip has none. */
+static const char kFrameInitCode[] = "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 44 24 "
+                                     "28 0F 28 05 ?? ?? ?? ?? 8B F2 0F 28 C8 C7 81 80 09 00 00";
+static const char kFrameLayoutCode[] = "48 89 5C 24 18 55 56 57 48 83 EC 20 F3 0F 10 91 80 09 00 00 48 8B E9 48 8B 41 0C 0F "
+                                       "28 CA F3 0F 58 CA 48 89 44 24 48";
+
 /* The Eagles' code: without it the pages still work, and Eagle Rearm reaches only the page shown. */
 static const struct { uint32_t rva; const char* pattern; const char* name; } kEagleCode[] = {
     { RVA_COOLDOWN, "40 53 41 54 41 57 48 83 EC 40 48 8B D9 45 8B E0 33 C9 4C 8B FA 44 8B 93 00 D2 02 00",
@@ -239,8 +252,6 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define PANEL_EXPANDED 55672u    /* u8 */
 #define PANEL_FOCUS 55660u       /* u32 focus index: 0-3 stratagems, 4 booster, 5-11 equipment, -1 none */
 #define PANEL_PREV_FOCUS 55664u
-#define FOCUS_BOOSTER 4u
-#define FOCUS_EQUIPMENT 5u
 #define PANEL_BOOSTER 35576u     /* the booster box node, at (-35, 30) */
 #define BOOSTER_X -35.0f
 #define NODE_SIZE_X 12u          /* floats: a node's size */
@@ -280,6 +291,37 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define COMMIT_TYPES 0xA14Cu     /* where the commit reads the four types: PANEL_SLOTS + WIDGET_TYPE */
 #define SLOT_PITCH 85.0f         /* 80 px widget + 5 px gap, as the game lays out its four */
 #define SLOT_ORIGIN 30.0f
+#define SLOT_INSET 5.0f          /* a slot widget draws 70 x 70, this far inside its 80 x 80 */
+#define PER_ROW 4u               /* slots a row, as the game's own */
+
+/* The fold strip (see "the fold strip"): a box, with a filled rectangle, a text and an outline in it, made the way the
+ * game makes a slot widget's background (SlotWidget_Init 0x1892DB0: kind 5, its field at +272 set to -1, layer 12,
+ * colour 0.141), the card's header text (LoadoutCard_BuildPanel: layer 14, colour 0.694) and a slot widget's outline
+ * (the frame at widget + 1944: as large as the widget, so 5 px outside the background; layer 15; 2 px thick and 0.4
+ * grey, 3 px and white or yellow on a hovered or focused slot; each side has a gap of 16 px in its middle). */
+#define NODE_KIND_BOX 1u
+#define NODE_KIND_FILL 5u
+#define NODE_FLAGS 0u            /* u32: flag 4 is set while the node waits for its layout (the game's hover test skips it) */
+#define NODE_UNPLACED 4u
+#define FILL_IMAGE 272u          /* u32: -1, no image */
+#define FRAME_BYTES 2456u        /* the game's frame: its box, six images and where they go */
+
+#define FRAME_THICKNESS 2432u    /* float: how thick its lines are */
+#define FRAME_SIDE_GAP 2436u     /* float: the gap in the middle of its left and right sides */
+#define STRIP_FILL 272u          /* the strip's memory: the box, the rectangle, the text, the frame */
+#define STRIP_TEXT (STRIP_FILL + 280u)
+#define STRIP_FRAME (STRIP_TEXT + TEXT_NODE_SIZE)
+#define STRIP_BYTES (STRIP_FRAME + FRAME_BYTES)
+#define STRIP_FILL_WIDTH (3.0f * SLOT_PITCH + 70.0f) /* from the first slot's drawn left edge to the fourth's right */
+#define STRIP_FILL_HEIGHT 20.0f
+#define STRIP_WIDTH (STRIP_FILL_WIDTH + 2.0f * SLOT_INSET)   /* the box and the frame: as a slot's, 5 px outside */
+#define STRIP_HEIGHT (STRIP_FILL_HEIGHT + 2.0f * SLOT_INSET)
+#define STRIP_SIDE_GAP 6.0f      /* a slot's 16 px in 80, for the strip's 30 */
+#define STRIP_STEP 35.0f         /* how far the strip moves the rows up: its height and the 5 px between two slots */
+#define FOLD_SECONDS 0.15f       /* how long the rows take to open and to close (collapse_animate) */
+#define LAYER_CARD_FILL 12u
+#define LAYER_CARD_TEXT 14u
+#define LAYER_CARD_FRAME 15u
 
 /* The loadout record */
 #define LOADOUT_SLOTS 0x188u
@@ -333,6 +375,8 @@ typedef void* (*CommitFn)(uint8_t* panel, uint8_t* loadout);
 typedef uint64_t (*WidgetInitFn)(uint8_t* widget, uint64_t unused, uint8_t small);
 typedef uint64_t (*WidgetSetTypeFn)(uint8_t* widget, uint32_t type);
 typedef void (*NodeVec2Fn)(uint8_t* node, uint64_t xy);
+typedef void (*NodeInitFn)(uint8_t* node, uint32_t kind);
+typedef void (*FrameInitFn)(uint8_t* frame, uint16_t layer);
 typedef uint64_t (*NodeAddChildFn)(uint8_t* parent, uint8_t* child, uint64_t unused);
 typedef uint8_t (*SpecialModeFn)(void);
 typedef uint64_t (*HoverFn)(uint8_t* panel, uint64_t unused, uint8_t cursor_off);
@@ -381,12 +425,26 @@ typedef struct
     int focus;        /* the focused extra slot, or -1 */
     int hover;        /* the extra slot under the mouse, or -1 */
     int pick_row;     /* PlaceSlots: the row the picker shows, or -1 */
+    uint8_t* strip;   /* the fold strip's nodes (STRIP_BYTES, after the widgets) */
+    int strip_ok;     /* ... made and linked under the panel since its last build */
+    int strip_focus;  /* the strip has the focus (and no extra slot has) */
+    int strip_hover;  /* the cursor is over the strip */
+    uint32_t strip_column; /* the column the focus came down to the strip from, and goes back up to */
+    int strip_look;   /* StripDraw: the colours it has (0 plain, 1 hovered, 2 focused), or -1 */
+    float fold_pos;   /* how far the rows under the game's four are open, 0 to 1 (before easing): it follows the fold */
+    LONGLONG fold_tick; /* ... and its last step, by QueryPerformanceCounter; 0 while it is not moving */
 } Panel;
 
 static const HfApi* hf;
 static HfMod* self;
 static uintptr_t game;
-static uint32_t g_slots = 8, g_per_row = 4, g_extra = 4;
+static uint32_t g_slots = 8, g_extra = 4;
+static int g_fold_set = 1;        /* collapse: loadouts of many rows have the fold strip */
+static uint32_t g_fold_rows = 3;  /* collapse_rows: ... those of this many rows or more */
+static int g_fold_animate = 1;    /* collapse_animate: the rows open and close over FOLD_SECONDS, not at once */
+static int g_fold_on;             /* ... and this one has, and the strip's code matched */
+static int g_frame_on;            /* ... and its outline's */
+static int g_folded = 1;          /* the rows under the game's four are hidden: on every card, from each screen's build */
 
 static RefreshFn g_refresh;
 static BuildPanelFn g_build_panel;
@@ -396,7 +454,9 @@ static WidgetSetTypeFn widget_set_type;
 static NodeVec2Fn node_set_position, node_set_pivot, node_set_anchor;
 static NodeAddChildFn node_add_child;
 static NodeVec2Fn node_set_size;
-static uint32_t g_rows; /* rows under the game's four (0: one row, the extra slots after the booster box) */
+static NodeInitFn node_init;
+static FrameInitFn frame_init;
+static uint32_t g_rows; /* rows under the game's four (1 or more) */
 static SpecialModeFn special_mode;
 static HoverFn g_hover;
 static NavFn g_nav;
@@ -419,7 +479,7 @@ static ResetFn g_reset;
 static ListOpenFn g_list_open;
 static CopyLoadoutFn g_copy_loadout;
 static ListUpdateFn g_list_update;
-static NodeFn text_init, node_layout, text_changed;
+static NodeFn text_init, node_layout, text_changed, frame_layout;
 static TextFontFn text_font;
 static TextReleaseFn text_release;
 static NodeSetLayerFn node_set_layer;
@@ -461,9 +521,9 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE, LOG_ROWS,
-       LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_KINDS };
+       LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_FOLD, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120, 40 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -497,7 +557,8 @@ static Panel* AddPanel(uint8_t* panel)
 {
     Panel* p = FindPanel(panel);
     if (p != NULL) return p;
-    uint8_t* widgets = VirtualAlloc(NULL, (size_t)g_extra * WIDGET_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    uint8_t* widgets = VirtualAlloc(NULL, (size_t)g_extra * WIDGET_SIZE + STRIP_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                    PAGE_READWRITE);
     if (widgets == NULL)
     {
         LOG_ONCE(LOG_BUILD, "could not allocate the extra slot widgets (error %lu)", GetLastError());
@@ -512,17 +573,138 @@ static Panel* AddPanel(uint8_t* panel)
     }
     p->panel = panel;
     p->widgets = widgets;
+    p->strip = widgets + (size_t)g_extra * WIDGET_SIZE;
     p->built = 0;
     p->failed = 0;
     p->focus = p->hover = p->pick_row = -1;
+    p->strip_ok = p->strip_focus = p->strip_hover = 0;
+    p->strip_column = 0;
+    p->strip_look = -1;
+    p->fold_pos = 1.0f;
+    p->fold_tick = 0;
     return p;
 }
+
+/* ---- the fold strip ---------------------------------------------------------------------------------------------- */
+
+/* A loadout of collapse_rows rows or more (3 by default: more than 8 slots) has a strip under its slots, unless
+ * collapse is off. Folded, the card shows the game's four and the strip, with the number of slots it hides
+ * ("SHOW [+12]"); a click on the strip, or the select button with the focus on it, shows the rows under the game's
+ * four, above the strip ("HIDE [-12]"), and the same hides them again. So the card is only as tall as its rows while
+ * the player wants to see them: the equipment row is anchored to the panel's top, and whatever another mod draws by
+ * it goes up with every row (Dedicated Melee Slot's pick box left the screen with 16 slots and more).
+ * The fold is one for every card, the other players' too (their strips show it and take no input), and every build of
+ * the loadout screen starts folded: LoadoutCard_BuildPanel runs once for each card of each screen (two visits in one
+ * session built the cards twice, at new addresses), and it is the only code that zeroes the panel's shown loadout.
+ * A panel lays its slots out for the fold in the hooks that are given it (SyncFold), never from the table: an entry
+ * outlives its panel.
+ * The rows open and close over FOLD_SECONDS, unless collapse_animate is off: each panel has how far its rows are open
+ * (fold_pos), and SyncFold moves it towards the fold by the time that has passed and lays the panel out for it, every
+ * frame until it is there (the card's update calls the hover hook every frame). The game has tweens of its own for a
+ * node's place, size and alpha, but a tween holds its node until it ends, and the extra slots are not the game's to
+ * tear down.
+ * Research: research/loadout-fold-findings.md. */
+static void LabelText(uint8_t* node, const char* text);
+static void SyncFold(Panel* p);
+static int Locked(const uint8_t* widget);
+
+static int Folded(const Panel* p) { return p->strip_ok && g_folded; }
+
+/* How much of the rows under the game's four shows, 0 to 1: fold_pos eased at both ends (smoothstep, as the game
+ * eases the card's own change of size). A panel without a strip shows them all. */
+static float FoldOpen(const Panel* p)
+{
+    return p->strip_ok ? p->fold_pos * p->fold_pos * (3.0f - 2.0f * p->fold_pos) : 1.0f;
+}
+
+/* The strip's text and colours. The frame's are a slot widget's own, plain, hovered and focused, and so is how thick
+ * it is (SlotWidget_ApplyState, which lays the frame out again after it too); the text takes the same colours. */
+static void StripDraw(Panel* p)
+{
+    if (!p->strip_ok) return;
+    char text[24];
+    wsprintfA(text, Folded(p) ? "SHOW [+%u]" : "HIDE [-%u]", g_extra);
+    LabelText(p->strip + STRIP_TEXT, text);
+    int look = p->strip_focus ? 2 : p->strip_hover ? 1 : 0;
+    if (look == p->strip_look) return;
+    p->strip_look = look;
+    static const float kText[3][3] = { { 0.694f, 0.694f, 0.694f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 0.914f, 0.0f } };
+    static const float kFill[3][3] = { { 0.141f, 0.141f, 0.141f }, { 0.2f, 0.2f, 0.2f }, { 0.2f, 0.2f, 0.2f } };
+    static const float kFrame[3][3] = { { 0.4f, 0.4f, 0.4f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 0.914f, 0.0f } };
+    node_set_color(p->strip + STRIP_TEXT, kText[look]);
+    node_set_color(p->strip + STRIP_FILL, kFill[look]);
+    if (g_frame_on)
+    {
+        uint8_t* frame = p->strip + STRIP_FRAME;
+        float thick = look ? 3.0f : 2.0f;
+        node_set_color(frame, kFrame[look]);
+        memcpy(frame + FRAME_THICKNESS, &thick, 4);
+        frame_layout(frame);
+    }
+}
+
+/* Makes the strip and links it under the panel, after the extra widgets and on the same condition: its nodes must
+ * have taken the UI context of the game's slots (the text's font comes from it). Without it the panel has no strip,
+ * and shows every row. */
+static void BuildStrip(Panel* p, uint64_t want, const char* how)
+{
+    p->strip_ok = p->strip_focus = p->strip_hover = 0;
+    p->strip_look = -1;
+    if (!g_fold_on) return;
+    uint8_t *box = p->strip, *fill = box + STRIP_FILL, *text = box + STRIP_TEXT, *frame = box + STRIP_FRAME;
+    memset(box, 0, STRIP_BYTES);
+    node_init(box, NODE_KIND_BOX);
+    node_init(fill, NODE_KIND_FILL);
+    Put32(fill + FILL_IMAGE, 0xFFFFFFFFu);
+    text_init(text);
+    if (g_frame_on) frame_init(frame, LAYER_CARD_FRAME);
+    if (Get64(box + NODE_CONTEXT) != want || Get64(fill + NODE_CONTEXT) != want || Get64(text + NODE_CONTEXT) != want ||
+        (g_frame_on && Get64(frame + NODE_CONTEXT) != want)) /* (the frame's images are made in the same call) */
+    {
+        LOG_ONCE(LOG_BUILD, "panel %p (%s): the fold strip got UI context %llx, the game's slots have %llx; no strip, "
+                 "every row shows", (void*)p->panel, how, (unsigned long long)Get64(box + NODE_CONTEXT),
+                 (unsigned long long)want);
+        return;
+    }
+    node_set_size(box, Vec2(STRIP_WIDTH, STRIP_HEIGHT));
+    node_set_pivot(box, 0);
+    node_set_anchor(box, 0);
+    node_set_size(fill, Vec2(STRIP_FILL_WIDTH, STRIP_FILL_HEIGHT));
+    node_set_position(fill, Vec2(SLOT_INSET, SLOT_INSET));
+    node_set_alpha(fill, 1.0f);
+    node_set_layer(fill, LAYER_CARD_FILL);
+    node_add_child(box, fill, 0);
+    if (g_frame_on)
+    {
+        /* its lines and its sides' gap before its size, then its layout, as SlotWidget_ApplyState does it */
+        float thick = 2.0f, gap = STRIP_SIDE_GAP;
+        memcpy(frame + FRAME_THICKNESS, &thick, 4);
+        memcpy(frame + FRAME_SIDE_GAP, &gap, 4);
+        node_set_size(frame, Vec2(STRIP_WIDTH, STRIP_HEIGHT));
+        node_set_alpha(frame, 1.0f);
+        node_add_child(box, frame, 0);
+        frame_layout(frame);
+    }
+    text_font(text, TEXT_STYLE_ROW, 1, 1, 1.0f, 0);
+    node_set_pivot(text, Vec2(0.5f, 0.5f));
+    node_set_anchor(text, Vec2(0.5f, 0.5f));
+    node_set_alpha(text, 1.0f);
+    node_set_layer(text, LAYER_CARD_TEXT);
+    node_add_child(box, text, 0);
+    node_add_child(p->panel, box, 0); /* placed by PlaceSlots */
+    p->strip_ok = 1;
+    StripDraw(p);
+    LOG_ONCE(LOG_FOLD, "panel %p (%s): fold strip linked, %s", (void*)p->panel, how, g_folded ? "folded" : "unfolded");
+}
+
+/* ---- the extra widgets (continued) ------------------------------------------------------------------------------- */
 
 /* Builds the extra widgets the way LoadoutCard_BuildPanel builds the game's four, and links them under the panel. A
  * node takes a UI context when it is initialised (node + 248); if the extras did not get the game's four's, they are
  * not linked (built lazily, at another time than the screen's build, they might not). */
 static void BuildExtras(Panel* p, const char* how)
 {
+    p->strip_ok = p->strip_focus = p->strip_hover = 0;
     uint64_t want = Get64(p->panel + PANEL_SLOTS + NODE_CONTEXT);
     for (uint32_t k = 0; k < g_extra; k++)
     {
@@ -549,56 +731,73 @@ static void BuildExtras(Panel* p, const char* how)
     p->focus = p->hover = p->pick_row = -1;
     LOG_ONCE(LOG_BUILD, "panel %p (%s): %u extra slots linked, UI context %llx", (void*)p->panel, how, g_extra,
              (unsigned long long)want);
+    BuildStrip(p, want, how);
+    p->fold_pos = Folded(p) ? 0.0f : 1.0f; /* a new panel starts at its fold, without moving there */
+    p->fold_tick = 0;
 }
 
-/* Rows: the panel taller by the extra rows (the card's frame follows the panel's height when the card updates; the
- * equipment row is anchored to the panel's top, so it moves up with it), and the game's four and the booster box up
- * by the same. The game sets the height in BuildPanel and in every refresh that runs, so this follows both. */
-static void FitPanel(uint8_t* panel)
+/* The panel taller by the rows it shows under the game's four, and by the strip (the card's frame follows the panel's
+ * height when the card updates; the equipment row is anchored to the panel's top, so it moves up with it). The game
+ * sets the height in BuildPanel and in every refresh that runs, so this follows both. */
+static void FitPanel(Panel* p)
 {
-    if (g_rows == 0) return;
-    float want = PANEL_HEIGHT + (panel[PANEL_EXPANDED] ? PANEL_HEIGHT_EXPANDED : 0.0f) + (float)g_rows * SLOT_PITCH;
+    uint8_t* panel = p->panel;
+    float want = PANEL_HEIGHT + (panel[PANEL_EXPANDED] ? PANEL_HEIGHT_EXPANDED : 0.0f) +
+                 FoldOpen(p) * (float)g_rows * SLOT_PITCH + (p->strip_ok ? STRIP_STEP : 0.0f);
     float width, height;
     memcpy(&width, panel + NODE_SIZE_X, 4);
     memcpy(&height, panel + NODE_SIZE_Y, 4);
     if (height != want) node_set_size(panel, Vec2(width, want));
 }
 
-/* Where the slots go. One row: the extra ones after the booster box, which sits where a fifth slot would. Rows: the
- * game's four (and the booster box) move up by the extra rows and the extra rows take their place and below; the UI's
- * y grows upwards, from the panel's bottom.
+/* Where the slots go: the game's four (and the booster box) move up by the rows shown under them, and those rows take
+ * their place and below; the UI's y grows upwards, from the panel's bottom. With a strip, it has the place at the
+ * bottom and every row is STRIP_STEP higher; folded, the rows under the game's four go far to the right, out of sight.
+ * On the way between the two (FoldOpen) the game's four are a part of the way up, and a row under them is at its
+ * place once they have passed half of it, fading in until they have passed all of it: nothing cuts a row off, so it
+ * cannot slide out from behind the strip. The fade is the alpha of the widget's box, which SlotWidget_ApplyState
+ * sets too (1.0, or 0.5 for a locked slot) at each change of the slot's state; it is set here again at each step.
  * pick_row >= 0: the stratagem picker is open on a slot of that row. The card then shows one row, at the game's row's
- * usual place (the rest of the panel is behind the card's header): that row goes there, the others past the card's
- * right edge, where the card cuts them off. */
+ * usual place (the rest of the panel is behind the card's header): that row goes there, the others and the strip past
+ * the card's right edge. */
 #define HIDE_X 4000.0f
 static void PlaceSlots(Panel* p, int pick_row)
 {
     p->pick_row = pick_row;
-    if (g_rows == 0)
-    {
-        for (uint32_t k = 0; k < g_extra; k++)
-            node_set_position(Extra(p, k), Vec2(SLOT_ORIGIN + (float)(GAME_SLOTS + k + 1) * SLOT_PITCH, SLOT_ORIGIN));
-        return;
-    }
+    float open = FoldOpen(p) * (float)g_rows; /* rows under the game's four that have room, and a part of one */
+    float base = SLOT_ORIGIN + (p->strip_ok ? STRIP_STEP : 0.0f);
     for (uint32_t slot = 0; slot < g_slots; slot++)
     {
-        int row = (int)(slot / g_per_row);
-        float x = SLOT_ORIGIN + (float)(slot % g_per_row) * SLOT_PITCH;
-        float y = SLOT_ORIGIN + (float)(g_rows - (uint32_t)row) * SLOT_PITCH;
+        int row = (int)(slot / PER_ROW);
+        uint8_t* w = slot < GAME_SLOTS ? GameSlot(p->panel, slot) : Extra(p, slot - GAME_SLOTS);
+        float x = SLOT_ORIGIN + (float)(slot % PER_ROW) * SLOT_PITCH;
+        float y = base + (row == 0 ? open : (float)((int)g_rows - row)) * SLOT_PITCH;
+        float fade = 1.0f;
         if (pick_row >= 0)
         {
             if (row == pick_row) y = SLOT_ORIGIN;
             else x += HIDE_X;
         }
-        node_set_position(slot < GAME_SLOTS ? GameSlot(p->panel, slot) : Extra(p, slot - GAME_SLOTS), Vec2(x, y));
+        else if (row > 0)
+        {
+            fade = (open - (float)((int)g_rows - row)) * 2.0f - 1.0f;
+            fade = fade < 0.0f ? 0.0f : fade > 1.0f ? 1.0f : fade;
+            if (fade == 0.0f) x += HIDE_X;
+        }
+        node_set_position(w, Vec2(x, y));
+        if (row > 0 && p->strip_ok) node_set_alpha(w, fade * (Locked(w) ? 0.5f : 1.0f));
     }
-    float booster_x = BOOSTER_X, booster_y = SLOT_ORIGIN + (float)g_rows * SLOT_PITCH;
+    float booster_x = BOOSTER_X, booster_y = base + open * SLOT_PITCH;
     if (pick_row >= 0)
     {
         if (pick_row == 0) booster_y = SLOT_ORIGIN;
         else booster_x += HIDE_X;
     }
     node_set_position(p->panel + PANEL_BOOSTER, Vec2(booster_x, booster_y));
+    if (p->strip_ok)
+        node_set_position(p->strip, Vec2(SLOT_ORIGIN + (pick_row >= 0 ? HIDE_X : 0.0f), SLOT_ORIGIN));
+    FitPanel(p);
+    StripDraw(p); /* its text says which way the fold goes */
 }
 
 /* The screen's local card. Its place is read from the game's code at each use: a mod that makes room for more cards
@@ -616,14 +815,15 @@ static void SyncPickLayout(uint8_t* screen)
 {
     uint8_t* card = LocalCard(screen);
     Panel* p = FindPanel(card + CARD_PANEL);
-    if (p == NULL || !p->built || g_rows == 0) return;
+    if (p == NULL || !p->built) return;
     int want = -1;
     if (Get32(screen + SCREEN_PICKER_MODE) == PICKER_STRATAGEMS && Get32(card + CARD_MODE) == 0)
     {
         uint32_t target = Get32(screen + SCREEN_PICKER_SLOT);
-        if (target < g_slots) want = (int)(target / g_per_row);
+        if (target < g_slots) want = (int)(target / PER_ROW);
     }
     if (want != p->pick_row) PlaceSlots(p, want);
+    SyncFold(p); /* the picker's move on to an extra slot unfolds (ClosePicker) */
 }
 
 static Panel* ReadyPanel(uint8_t* panel, const char* how)
@@ -632,11 +832,7 @@ static Panel* ReadyPanel(uint8_t* panel, const char* how)
     if (p != NULL && !p->built && !p->failed)
     {
         BuildExtras(p, how);
-        if (p->built)
-        {
-            PlaceSlots(p, -1);
-            FitPanel(panel);
-        }
+        if (p->built) PlaceSlots(p, -1);
     }
     return p != NULL && p->built ? p : NULL;
 }
@@ -708,16 +904,82 @@ static void FocusExtra(Panel* p, int k)
     SetState(GameSlot(p->panel, GAME_SLOTS - 1), STATE_FOCUS, 0);
     p->focus = k;
     SetState(Extra(p, (uint32_t)k), STATE_FOCUS, 1);
+    if (p->strip_focus)
+    {
+        p->strip_focus = 0;
+        StripDraw(p);
+    }
 }
 
-/* Off the extra slot; the game's next SetFocus then starts from no focus (its slot 4 is already drawn unfocused). */
+/* Focus on the fold strip, the same way: the game's focus on its slot 4, drawn unfocused, and the strip drawn
+ * focused. The select button is then the strip's (Nav), not the game's slot 4's. */
+static void FocusStrip(Panel* p)
+{
+    if (p->focus >= 0) SetState(Extra(p, (uint32_t)p->focus), STATE_FOCUS, 0);
+    p->focus = -1;
+    g_set_focus(p->panel, GAME_SLOTS - 1);
+    SetState(GameSlot(p->panel, GAME_SLOTS - 1), STATE_FOCUS, 0);
+    p->strip_focus = 1;
+    StripDraw(p);
+}
+
+/* Off the extra slot or the strip; the game's next SetFocus then starts from no focus (its slot 4 is already drawn
+ * unfocused). */
 static void UnfocusExtra(Panel* p)
 {
-    if (p->focus < 0) return;
-    SetState(Extra(p, (uint32_t)p->focus), STATE_FOCUS, 0);
+    if (p->focus < 0 && !p->strip_focus) return;
+    if (p->focus >= 0) SetState(Extra(p, (uint32_t)p->focus), STATE_FOCUS, 0);
     p->focus = -1;
+    if (p->strip_focus)
+    {
+        p->strip_focus = 0;
+        StripDraw(p);
+    }
     Put32(p->panel + PANEL_FOCUS, 0xFFFFFFFFu);
     Put32(p->panel + PANEL_PREV_FOCUS, 0xFFFFFFFFu);
+}
+
+/* The panel's rows a step further towards the fold as it is now, and its layout for that (see "the fold strip"): by
+ * the time since the last step, so the whole way takes FOLD_SECONDS at any frame rate. The first call after the fold
+ * changed only starts the clock (and the strip's text changes). While the picker has the card, the rows are not in
+ * their places anyway: there they are at the fold at once, as they always are with collapse_animate off. A slot that
+ * goes out of sight loses the focus. */
+static void SyncFold(Panel* p)
+{
+    if (!p->built || !p->strip_ok) return;
+    float to = Folded(p) ? 0.0f : 1.0f;
+    if (p->fold_pos == to)
+    {
+        p->fold_tick = 0;
+        return;
+    }
+    if (to == 0.0f && p->focus >= 0) UnfocusExtra(p);
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (p->pick_row >= 0 || !g_fold_animate) p->fold_pos = to;
+    else if (p->fold_tick != 0)
+    {
+        static LONGLONG per_second;
+        if (per_second == 0)
+        {
+            LARGE_INTEGER frequency;
+            QueryPerformanceFrequency(&frequency);
+            per_second = frequency.QuadPart;
+        }
+        float step = (float)((double)(now.QuadPart - p->fold_tick) / (double)per_second) / FOLD_SECONDS;
+        if (to > p->fold_pos) p->fold_pos = p->fold_pos + step < to ? p->fold_pos + step : to;
+        else p->fold_pos = p->fold_pos - step > to ? p->fold_pos - step : to;
+    }
+    p->fold_tick = p->fold_pos == to ? 0 : now.QuadPart;
+    PlaceSlots(p, p->pick_row);
+}
+
+static void ToggleFold(Panel* p)
+{
+    g_folded = !g_folded;
+    play_sound(0, SOUND_SELECT);
+    LOG_ONCE(LOG_FOLD, "fold strip of panel %p: %s", (void*)p->panel, g_folded ? "folded" : "unfolded");
+    SyncFold(p);
 }
 
 static int Pressed(const uint8_t* input, uint64_t action)
@@ -733,7 +995,8 @@ static uint32_t BuildPanel(uint8_t* panel)
 {
     uint32_t result = g_build_panel(panel);
     Panel* p = FindPanel(panel);
-    if (p != NULL) p->built = p->failed = 0; /* the build reset the panel's children: link the extras again */
+    if (p != NULL) p->built = p->failed = p->strip_ok = 0; /* the build reset the panel's children: link the extras again */
+    g_folded = 1; /* a new loadout screen (its cards are all built together) starts folded */
     ReadyPanel(panel, "panel build");
     return result;
 }
@@ -745,16 +1008,23 @@ static void Refresh(uint8_t* panel, uint8_t* loadout, uint8_t expanded, uint8_t 
     int runs = force || known == NULL || !known->built || Get64(panel + PANEL_SHOWN) != (uint64_t)(uintptr_t)loadout ||
                panel[PANEL_EXPANDED] != expanded;
     /* Shown for the first time, the game puts the focus on its first slot itself (without SetFocus). */
-    if (known != NULL && known->built && Get64(panel + PANEL_SHOWN) == 0 && known->focus >= 0)
+    if (known != NULL && known->built && Get64(panel + PANEL_SHOWN) == 0 && (known->focus >= 0 || known->strip_focus))
     {
-        SetState(Extra(known, (uint32_t)known->focus), STATE_FOCUS, 0);
+        if (known->focus >= 0) SetState(Extra(known, (uint32_t)known->focus), STATE_FOCUS, 0);
         known->focus = -1;
+        known->strip_focus = 0;
+        StripDraw(known);
     }
     g_refresh(panel, loadout, expanded, force);
-    if (!runs) return;
+    if (!runs)
+    {
+        SyncFold(known); /* folded or unfolded on another card, or by the picker */
+        return;
+    }
     Panel* p = ReadyPanel(panel, "first refresh");
     if (p == NULL) return;
-    FitPanel(panel); /* the refresh set the game's height again */
+    SyncFold(p);
+    FitPanel(p); /* the refresh set the game's height again */
     FillExtras(p, loadout);
 }
 
@@ -840,16 +1110,18 @@ static void* Commit(uint8_t* panel, uint8_t* loadout)
     return result;
 }
 
-/* Any focus change the game makes takes the focus off the extra slot. */
+/* Any focus change the game makes takes the focus off the extra slot or the strip. */
 static uint64_t HookSetFocus(uint8_t* panel, uint32_t index)
 {
     Panel* p = FindPanel(panel);
-    if (p != NULL && p->focus >= 0) UnfocusExtra(p);
+    if (p != NULL) UnfocusExtra(p);
     return g_set_focus(panel, index);
 }
 
 /* The mouse: after the game's own test of its widgets, the same test of the extra slots. With the virtual cursor the
- * game only draws hover (no index); so do the extra slots. */
+ * game only draws hover (no index); so do the extra slots. The strip is tested the way the game tests the booster box
+ * (a box of its own too), on the local player's card only. While the strip waits for its layout it keeps the hover
+ * it had: drawing it hovered changes its frame, and with it the strip would lose the hover that changed it. */
 static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
 {
     uint64_t result = g_hover(panel, unused, cursor_off);
@@ -868,44 +1140,100 @@ static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
         else
             SetState(w, STATE_HOVER, !cursor_off && cursor_over(cursor, w, 0));
     }
+    if (p->strip_ok)
+    {
+        int over = panel[PANEL_EXPANDED] && !cursor_off && p->pick_row < 0 &&
+                   ((Get32(p->strip + NODE_FLAGS) & NODE_UNPLACED) != 0 ? p->strip_hover :
+                    cursor_over(cursor, p->strip, 0));
+        if (over != p->strip_hover)
+        {
+            p->strip_hover = over;
+            StripDraw(p);
+        }
+    }
+    SyncFold(p); /* after the tests: they set a slot's state, and with it its alpha */
     return result;
 }
 
 /* Rows: down from the game's four into the rows under them and back up, the same column; left and right along a row
- * of extra slots (off the card at its ends, as from the game's row). NAV_PASS: the game's own handling. */
+ * of extra slots (off the card at its ends, as from the game's row). The strip is under the last slot of every column
+ * that is shown: down to it, up from it into the column the focus came down, and off the card to its left and right.
+ * NAV_PASS: the game's own handling. */
 #define NAV_PASS 0xFFu
 static uint64_t RowNav(Panel* p, int32_t dir)
 {
     uint8_t* panel = p->panel;
+    int folded = Folded(p);
+    if (p->strip_focus)
+    {
+        if (dir == NAV_DOWN) return 0; /* nothing under it */
+        if (dir == NAV_TO_EQUIPMENT)
+        {
+            uint32_t col = p->strip_column;
+            play_sound(0, SOUND_MOVE);
+            if (!folded) /* the column's last slot that can take the focus */
+                for (uint32_t slot = g_slots - 1 - (g_slots - 1 - col) % PER_ROW; slot >= GAME_SLOTS; slot -= PER_ROW)
+                    if (!Locked(Extra(p, slot - GAME_SLOTS)))
+                    {
+                        FocusExtra(p, (int)(slot - GAME_SLOTS));
+                        return NAV_MOVED;
+                    }
+            UnfocusExtra(p);
+            g_set_focus(panel, col);
+            return NAV_MOVED;
+        }
+        if (dir == NAV_LEFT || dir == NAV_RIGHT)
+        {
+            play_sound(0, SOUND_MOVE);
+            UnfocusExtra(p);
+            g_set_focus(panel, 0xFFFFFFFFu);
+            return dir == NAV_RIGHT ? NAV_LEAVE_RIGHT : NAV_LEAVE_LEFT;
+        }
+        return NAV_PASS;
+    }
     if (p->focus < 0)
     {
         uint32_t focus = Get32(panel + PANEL_FOCUS);
         if (dir != NAV_DOWN || focus >= GAME_SLOTS) return NAV_PASS;
-        uint32_t k = focus + g_per_row - GAME_SLOTS; /* the slot under it */
-        if (k >= g_extra || Locked(Extra(p, k))) return NAV_PASS;
+        uint32_t k = focus + PER_ROW - GAME_SLOTS; /* the slot under it */
+        if (!folded && k < g_extra && !Locked(Extra(p, k)))
+        {
+            play_sound(0, SOUND_MOVE);
+            FocusExtra(p, (int)k);
+            return NAV_MOVED;
+        }
+        if (!p->strip_ok) return NAV_PASS;
         play_sound(0, SOUND_MOVE);
-        FocusExtra(p, (int)k);
+        p->strip_column = focus;
+        FocusStrip(p);
         return NAV_MOVED;
     }
-    uint32_t slot = GAME_SLOTS + (uint32_t)p->focus, col = slot % g_per_row;
+    uint32_t slot = GAME_SLOTS + (uint32_t)p->focus, col = slot % PER_ROW;
     if (dir == NAV_DOWN || dir == NAV_TO_EQUIPMENT)
     {
         int up = dir == NAV_TO_EQUIPMENT;
-        if (!up && slot + g_per_row >= g_slots) return 0; /* the bottom row */
+        if (!up && slot + PER_ROW >= g_slots) /* the column's last slot */
+        {
+            if (!p->strip_ok) return 0;
+            play_sound(0, SOUND_MOVE);
+            p->strip_column = col;
+            FocusStrip(p);
+            return NAV_MOVED;
+        }
         play_sound(0, SOUND_MOVE);
-        if (up && slot < 2 * g_per_row) /* the row under the game's four: up into them */
+        if (up && slot < 2 * PER_ROW) /* the row under the game's four: up into them */
         {
             UnfocusExtra(p);
-            g_set_focus(panel, col < GAME_SLOTS ? col : GAME_SLOTS - 1);
+            g_set_focus(panel, col);
         }
         else
-            FocusExtra(p, (int)(up ? slot - g_per_row : slot + g_per_row) - (int)GAME_SLOTS);
+            FocusExtra(p, (int)(up ? slot - PER_ROW : slot + PER_ROW) - (int)GAME_SLOTS);
         return NAV_MOVED;
     }
     if (dir == NAV_LEFT || dir == NAV_RIGHT)
     {
         int right = dir == NAV_RIGHT;
-        int edge = right ? (col + 1 == g_per_row || slot + 1 >= g_slots) : col == 0;
+        int edge = right ? (col + 1 == PER_ROW || slot + 1 >= g_slots) : col == 0;
         play_sound(0, SOUND_MOVE);
         if (!edge)
         {
@@ -919,68 +1247,33 @@ static uint64_t RowNav(Panel* p, int32_t dir)
     return NAV_PASS;
 }
 
-/* Clicks on an extra slot, and the controller's way into and along them. One row: the game's four, the booster box,
- * then the extra slots, then off the card (as from the booster box). Rows: RowNav. */
+/* Clicks on an extra slot and on the strip, the select button on the strip, and the controller's way into and along
+ * them (RowNav). The game takes the select button the same way: on the local player's card, the mouse's on what it
+ * is over and the controller's on what has the focus. NAV_MOVED is its "handled, nothing to open". */
 static uint64_t Nav(uint8_t* panel, uint8_t* input, uint64_t unused, uint8_t nav_on)
 {
     Panel* p = FindPanel(panel);
     if (p == NULL || !p->built) return g_nav(panel, input, unused, nav_on);
-    if (panel[PANEL_EXPANDED] && p->hover >= 0 && InputModes()[MODE_MOUSE] && Pressed(input, ACTION_SELECT))
+    if (panel[PANEL_EXPANDED] && Pressed(input, ACTION_SELECT))
     {
-        play_sound(0, SOUND_SELECT);
-        FocusExtra(p, p->hover);
-        LOG_ONCE(LOG_PICK, "click on extra slot %d", p->focus + (int)GAME_SLOTS + 1);
-        return NAV_OPEN_CLICK;
+        int mouse = InputModes()[MODE_MOUSE];
+        if (mouse && p->hover >= 0)
+        {
+            play_sound(0, SOUND_SELECT);
+            FocusExtra(p, p->hover);
+            LOG_ONCE(LOG_PICK, "click on extra slot %d", p->focus + (int)GAME_SLOTS + 1);
+            return NAV_OPEN_CLICK;
+        }
+        if (p->strip_ok && p->pick_row < 0 && (mouse ? p->strip_hover : p->strip_focus))
+        {
+            ToggleFold(p);
+            return NAV_MOVED;
+        }
     }
     if (nav_on)
     {
-        int32_t dir = nav_dir(input);
-        if (g_rows != 0)
-        {
-            uint64_t moved = RowNav(p, dir);
-            if (moved != NAV_PASS) return moved;
-        }
-        else if (p->focus >= 0)
-        {
-            int k = p->focus;
-            if (dir == NAV_RIGHT)
-            {
-                play_sound(0, SOUND_MOVE);
-                if ((uint32_t)k + 1 < g_extra)
-                {
-                    FocusExtra(p, k + 1);
-                    return NAV_MOVED;
-                }
-                UnfocusExtra(p);
-                g_set_focus(panel, 0xFFFFFFFFu);
-                return NAV_LEAVE_RIGHT;
-            }
-            if (dir == NAV_LEFT)
-            {
-                play_sound(0, SOUND_MOVE);
-                if (k > 0) FocusExtra(p, k - 1);
-                else
-                {
-                    UnfocusExtra(p);
-                    g_set_focus(panel, FOCUS_BOOSTER);
-                }
-                return NAV_MOVED;
-            }
-            if (dir == NAV_TO_EQUIPMENT)
-            {
-                if (!panel[PANEL_EXPANDED]) return 0;
-                play_sound(0, SOUND_MOVE);
-                UnfocusExtra(p);
-                g_set_focus(panel, FOCUS_EQUIPMENT);
-                return NAV_MOVED;
-            }
-        }
-        else if (dir == NAV_RIGHT && Get32(panel + PANEL_FOCUS) == FOCUS_BOOSTER && !Locked(Extra(p, 0)))
-        {
-            play_sound(0, SOUND_MOVE);
-            FocusExtra(p, 0);
-            return NAV_MOVED;
-        }
+        uint64_t moved = RowNav(p, nav_dir(input));
+        if (moved != NAV_PASS) return moved;
     }
     /* The rest (the select button with an extra slot focused: the game sees its slot 4 focused, opens the picker in
      * stratagem mode, and OpenPicker below retargets it). */
@@ -1048,6 +1341,7 @@ static uint64_t ClosePicker(uint8_t* screen, uint64_t unused)
                 uint8_t* w = Extra(p, k);
                 if (Get32(w + WIDGET_TYPE) != 0 || Locked(w)) continue;
                 Put32(screen + SCREEN_PICKER_SLOT, GAME_SLOTS + k);
+                g_folded = 0; /* the picks from here on are in the rows the fold hides: show them */
                 FocusExtra(p, (int)k);
                 LOG_ONCE(LOG_PICK, "picker moves on to extra slot %u", k + GAME_SLOTS + 1);
                 SyncPickLayout(screen);
@@ -2849,33 +3143,31 @@ static uint32_t Clamp(uint32_t v, uint32_t lo, uint32_t hi) { return v < lo ? lo
 static const char kDefaultSettings[] =
     "# More Stratagem Slots settings. Changes apply the next time the game starts.\r\n"
     "\r\n"
-    "# Stratagem slots in the loadout, 4 to 20. When they don't all fit in the game's stratagem list (16 including its\r\n"
-    "# own, like Reinforce and Resupply), they are split into pages.\r\n"
+    "# Stratagem slots in the loadout, 4 to 20. Those that don't fit in the game's stratagem list are split into pages.\r\n"
     "slots = 8\r\n"
     "\r\n"
-    "# Slots per row on the loadout screen, 4 to 20.\r\n"
-    "per_row = 4\r\n"
+    "# Loadout screen: a loadout of collapse_rows rows of four or more (2 to 5) shows its first row, and a bar that\r\n"
+    "# shows and hides the others. With collapse off, every row always shows. With collapse_animate off, the rows\r\n"
+    "# show and hide at once.\r\n"
+    "collapse = on\r\n"
+    "collapse_rows = 3\r\n"
+    "collapse_animate = on\r\n"
     "\r\n"
-    "# Keys for the previous and next page, while the stratagem list is open. A letter, a digit, or a Windows\r\n"
+    "# Keys for the previous and next page, while the stratagem list is open: a letter, a digit, or a Windows\r\n"
     "# virtual-key code.\r\n"
     "page_prev = Q\r\n"
     "page_next = E\r\n"
     "\r\n"
-    "# Lets the mouse wheel switch pages while the stratagem list is open (on or off): wheel up is the next page,\r\n"
-    "# wheel down the previous one. With page_wheel_invert on it is the other way around.\r\n"
+    "# The mouse wheel switches pages too: wheel up is the next page, or the previous one with page_wheel_invert on.\r\n"
     "page_wheel = on\r\n"
     "page_wheel_invert = off\r\n"
     "\r\n"
-    "# Stops you from switching pages while a stratagem is in your hand or being called in (on). With off you can switch\r\n"
-    "# at any time, and a stratagem in your hand stays in the list until it has been called in.\r\n"
+    "# Pages, each on or off:\r\n"
+    "# page_lock: no switching while a stratagem is in your hand or being called in.\r\n"
+    "# page_added: stratagems that other mods add during a mission go after your pages, not on every page.\r\n"
+    "# page_rearm: Eagle Rearm shows on every page once an Eagle has spent a use, not only on pages with an Eagle.\r\n"
     "page_lock = off\r\n"
-    "\r\n"
-    "# Puts stratagems that other mods add to your list during a mission in the pages after your own (on). With off they\r\n"
-    "# stay on every page, which leaves less room for yours.\r\n"
     "page_added = on\r\n"
-    "\r\n"
-    "# Shows Eagle Rearm on every page once an Eagle has spent a use (on). With off it only shows on pages that hold an\r\n"
-    "# Eagle.\r\n"
     "page_rearm = on\r\n";
 
 /* The file's path: the mod's folder is mods\<folder>, or deeper for a zip (mods\.unpacked\<zip>). */
@@ -2907,7 +3199,7 @@ static void ReadSettings(void)
     wchar_t wide[1024];
     if (!SettingsPath(path, sizeof path, wide, 1024))
     {
-        hf->log(self, "no path for " SETTINGS_NAME "; using %u slots, %u per row", g_slots, g_per_row);
+        hf->log(self, "no path for " SETTINGS_NAME "; using %u slots", g_slots);
         return;
     }
     HANDLE file = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -2926,11 +3218,11 @@ static void ReadSettings(void)
                 CloseHandle(file);
             }
         }
-        if (wrote) hf->log(self, "wrote %s with the defaults: %u slots, %u per row", path, g_slots, g_per_row);
+        if (wrote) hf->log(self, "wrote %s with the defaults: %u slots", path, g_slots);
         else
-            hf->log(self, "%s could not be %s (error %u); using the defaults: %u slots, %u per row", path,
+            hf->log(self, "%s could not be %s (error %u); using the defaults: %u slots", path,
                     error == ERROR_FILE_NOT_FOUND ? "written" : "opened",
-                    (unsigned)(error == ERROR_FILE_NOT_FOUND ? GetLastError() : error), g_slots, g_per_row);
+                    (unsigned)(error == ERROR_FILE_NOT_FOUND ? GetLastError() : error), g_slots);
         return;
     }
     char text[4096];
@@ -2940,7 +3232,7 @@ static void ReadSettings(void)
     if (!ok) return;
     text[size] = 0;
 
-    int old_hold = 0;
+    int old_hold = 0, old_per_row = 0;
     for (char* line = text; line != NULL && *line;)
     {
         char* end = strchr(line, '\n');
@@ -2976,13 +3268,17 @@ static void ReadSettings(void)
             /* (page_hold, 0.1's setting with on as its default, is not read any more: every file made then has it on,
              * and the pages no longer need it) */
             if (key_len == 9 && memcmp(line, "page_hold", 9) == 0) old_hold = 1;
+            /* (per_row, a setting until 0.3.0, neither: the rows are of four, as the game's own) */
+            if (key_len == 7 && memcmp(line, "per_row", 7) == 0) old_per_row = 1;
             int is_invert = key_len == 17 && memcmp(line, "page_wheel_invert", 17) == 0;
-            if (is_wheel || is_lock || is_added || is_rearm || is_invert)
+            int is_fold = key_len == 8 && memcmp(line, "collapse", 8) == 0;
+            int is_animate = key_len == 16 && memcmp(line, "collapse_animate", 16) == 0;
+            if (is_wheel || is_lock || is_added || is_rearm || is_invert || is_fold || is_animate)
             {
                 const char* v = eq + 1;
                 while (*v == ' ' || *v == '\t') v++;
                 *(is_wheel ? &g_wheel_on : is_lock ? &g_page_lock : is_added ? &g_page_added : is_rearm ? &g_page_rearm :
-                  &g_wheel_invert) =
+                  is_fold ? &g_fold_set : is_animate ? &g_fold_animate : &g_wheel_invert) =
                     !(_strnicmp(v, "off", 3) == 0 || _strnicmp(v, "no", 2) == 0 || _strnicmp(v, "false", 5) == 0 || *v == '0');
                 line = end != NULL ? end + 1 : NULL;
                 continue;
@@ -2995,23 +3291,28 @@ static void ReadSettings(void)
                 else if (digits || (*v != ' ' && *v != '\t')) break;
             }
             if (digits && key_len == 5 && memcmp(line, "slots", 5) == 0) g_slots = value;
-            else if (digits && key_len == 7 && memcmp(line, "per_row", 7) == 0) g_per_row = value;
+            else if (digits && key_len == 13 && memcmp(line, "collapse_rows", 13) == 0) g_fold_rows = value;
         }
         line = end != NULL ? end + 1 : NULL;
     }
-    hf->log(self, "read %s: slots = %u, per_row = %u (before limits), page keys 0x%02X / 0x%02X, page_wheel %s, "
-            "page_wheel_invert %s, page_lock %s, page_added %s, page_rearm %s", path, g_slots, g_per_row, g_key_prev,
+    hf->log(self, "read %s: slots = %u, collapse_rows = %u (before limits), collapse %s, collapse_animate %s, "
+            "page keys 0x%02X / 0x%02X, "
+            "page_wheel %s, page_wheel_invert %s, page_lock %s, page_added %s, page_rearm %s", path, g_slots,
+            g_fold_rows, g_fold_set ? "on" : "off", g_fold_animate ? "on" : "off", g_key_prev,
             g_key_next, g_wheel_on ? "on" : "off", g_wheel_invert ? "on" : "off", g_page_lock ? "on" : "off",
             g_page_added ? "on" : "off", g_page_rearm ? "on" : "off");
     if (old_hold)
         hf->log(self, "page_hold in %s is not a setting any more and was not read: pages change at any time now. "
                 "page_lock = on brings the old behaviour back", path);
+    if (old_per_row)
+        hf->log(self, "per_row in %s is not a setting any more and was not read: the loadout's rows are of four", path);
 }
 
 /* ---- start ------------------------------------------------------------------------------------------------------- */
 
 /* What the game-loaded event found: which optional parts' code matched. Their hooks go in later, with the rest. */
 static int g_label_code, g_eagle_code, g_follow_code, g_ball_code, g_park_code;
+static int g_fold_wanted; /* collapse and collapse_rows: this loadout's rows get the fold strip, if its code is there */
 static int g_ticking;    /* Tick is registered */
 
 /* Every hook, in one go. Not in the game-loaded event: HellForge sends that event to the mods one after another on its
@@ -3073,9 +3374,10 @@ static void InstallHooks(HfMod* mod)
     if (g_park_ok) g_available = (AvailableFn)(game + RVA_AVAILABLE);
     if (g_ticking) StartWheel();
     g_hooked = 1;
-    hf->log(mod, "ready (hooks in after %u ms): %u stratagem slots, %u per row, page label %s, Eagles across pages %s, "
+    hf->log(mod, "ready (hooks in after %u ms): %u stratagem slots, fold strip %s, page label %s, Eagles across pages %s, "
             "mouse wheel %s, parking %s, pages %s, thrown stratagem's end %s",
-            (unsigned)(GetTickCount64() - started), g_slots, g_per_row, g_label_ok ? "on" : "off",
+            (unsigned)(GetTickCount64() - started), g_slots, !g_fold_on ? "off" : g_frame_on ? "on" : "on (no outline)",
+            g_label_ok ? "on" : "off",
             g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off",
             Following() ? "follow a stratagem in hand" : "locked while a stratagem is in hand or being called in",
             ball ? "hooked" : "not hooked");
@@ -3131,6 +3433,19 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
         node_set_color = (NodeSetColorFn)(game + RVA_NODE_SET_COLOR);
         node_set_visible = (NodeSetVisibleFn)(game + RVA_NODE_SET_VISIBLE);
     }
+    /* the fold strip: a box and a rectangle of the game's own, and a text node like the label's */
+    g_fold_on = g_fold_wanted && g_label_code && hf->code_matches(game + RVA_NODE_INIT, kNodeInitCode);
+    if (g_fold_wanted && !g_fold_on)
+        hf->log(mod, "the game's %s is not the code this mod knows: no fold strip, the loadout card shows every row",
+                g_label_code ? "node init (0x1446840)" : "text code");
+    node_init = (NodeInitFn)(game + RVA_NODE_INIT);
+    g_frame_on = g_fold_on && hf->code_matches(game + RVA_FRAME_INIT, kFrameInitCode) &&
+                 hf->code_matches(game + RVA_FRAME_LAYOUT, kFrameLayoutCode);
+    if (g_fold_on && !g_frame_on)
+        hf->log(mod, "the game's frame code (0x17909F0, 0x1791380) is not the code this mod knows: the fold strip has "
+                "no outline");
+    frame_init = (FrameInitFn)(game + RVA_FRAME_INIT);
+    frame_layout = (NodeFn)(game + RVA_FRAME_LAYOUT);
     g_eagle_code = 1;
     for (uint32_t i = 0; i < EAGLE_CODE_COUNT && g_eagle_code; i++)
         if (!hf->code_matches(game + kEagleCode[i].rva, kEagleCode[i].pattern))
@@ -3188,9 +3503,10 @@ HF_MOD_EXPORT int hellforge_mod_init(const HfApi* api, HfMod* mod)
     self = mod;
     ReadSettings();
     g_slots = Clamp(g_slots, GAME_SLOTS, MAX_SLOTS);
-    g_per_row = Clamp(g_per_row, GAME_SLOTS, MAX_SLOTS); /* the game's four stay one row */
     g_extra = g_slots - GAME_SLOTS;
-    g_rows = g_slots <= g_per_row ? 0 : (g_slots - 1) / g_per_row;
+    g_rows = (g_slots - 1) / PER_ROW;
+    g_fold_rows = Clamp(g_fold_rows, 2, MAX_SLOTS / PER_ROW);
+    g_fold_wanted = g_fold_set && g_rows + 1 >= g_fold_rows;
     if (g_extra == 0)
     {
         hf->log(mod, "slots = 4: nothing to do");
