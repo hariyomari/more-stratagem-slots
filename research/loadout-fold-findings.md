@@ -5,8 +5,8 @@ Findings behind 0.3.0's fold strip (`more-stratagem-slots/src/stratagem_slots.c`
 2026-11-23, with the mod's session logs where it says so. The strip's first build (a filled bar with "+12" and
 "-12") was run on the 0.5 nightly that day; what that session showed, and what is still to be seen, is at the end.
 The outline, the "SHOW [+12]" text and the `collapse` setting came after it and passed a second test that day.
-**The rows' opening and closing over a moment, and the `collapse_animate` setting, came after that and have not been
-seen in game yet**: that code compiles (the nightly's zig, no warnings).
+The rows' opening and closing over a moment, and the `collapse_animate` setting, came after that and ran in two more
+sessions, on the nightly and on HellForge 0.4.0-beta ("The last sessions", at the end).
 
 ## The problem
 
@@ -231,21 +231,26 @@ The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots
   header then).
 - The filled bar with no outline is easy to miss against the card: hence the frame.
 
+## The last sessions (2026-11-23 and 24, 20 slots, the code as released in 0.3.0)
+
+- 0.5 nightly, session `e6e52f8e41b44ae18b782f2f10d3d347`, 13 mods, Complex Operations among them (eight cards):
+  - `fold strip on`; all eight panels got their extra slots and their strip, folded.
+  - The eight were built a second time 66 s later, at the same addresses, and were folded again: a build folds,
+    whatever the fold was.
+  - 21 presses on the strip, the quickest 0.1 s apart (inside the 0.15 s the rows take): no line of the log is out
+    of the ordinary after them, and the picker's move on and the commits went on as before.
+  - A full difficulty 10 mission after it; the game exited with code 0 and no problem was seen.
+- HellForge 0.4.0-beta, session `5ca5e32d89b0447f90162fda18c55c1b`, six mods:
+  - `fold strip on`; four panels with their strips; the picker's move on through the hidden rows; a difficulty 11
+    mission (the list's parking ran). An old settings file's `per_row` and `page_hold` were named in the log and
+    not read.
+  - The session ended in a crash of the game's, not the mod's: an access violation at helldivers2.exe + 0x626296
+    on a thread of the graphics driver (D3D12Core and nvwgf2umx on its stack), 2.7 s after the game opened its menu
+    in the mission. Three sessions of 2026-11-16 and 17 on this HellForge, with 0.1.1, 0.1.4 and 0.2.0, ended at
+    the same address with the same registers, two of them after the same menu.
+
 ## Still to be seen
 
-The second test covered the frame, the text and the setting. Of the opening and closing over a moment, nothing has
-been seen:
-
-1. The card growing and shrinking smoothly: its frame, the equipment row and the READY UP button following the
-   panel's height every frame, not only at the end.
-2. The rows fading in from the bottom one up, and out the other way; a locked slot ending at its half alpha.
-3. A second press while the rows move: they turn round from where they are.
-4. The picker opened right after a press, and its move on into a hidden row: the rows at their places at once.
-5. No slot left faded or out of place after hovering and moving the focus while the rows move.
-6. Dedicated Melee Slot's box moving with the card.
-
-And as before:
-
-7. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
-8. Another player's card (co-op): its strip follows the local one and takes no input.
-9. 8, 9 and 20 slots; `collapse = off`; `collapse_rows`; `collapse_animate = off`.
+1. Another player's card (co-op): its strip follows the local one and takes no input.
+2. 8 and 9 slots; `collapse = off`; `collapse_rows`; `collapse_animate = off`.
+3. Dedicated Melee Slot's box moving with the card (it was off in the last sessions).
