@@ -5,8 +5,8 @@ Findings behind 0.3.0's fold strip (`more-stratagem-slots/src/stratagem_slots.c`
 2026-11-23, with the mod's session logs where it says so. The strip's first build (a filled bar with "+12" and
 "-12") was run on the 0.5 nightly that day; what that session showed, and what is still to be seen, is at the end.
 The outline, the "SHOW [+12]" text and the `collapse` setting came after it and passed a second test that day.
-**The rows' opening and closing over 0.1 s came after that and has not been seen in game yet**: that code compiles
-(the nightly's zig, no warnings).
+**The rows' opening and closing over a moment, and the `collapse_animate` setting, came after that and have not been
+seen in game yet**: that code compiles (the nightly's zig, no warnings).
 
 ## The problem
 
@@ -200,14 +200,16 @@ called, and an answer to what happens to a tween on a node of the mod's when the
 ### What was built
 
 - From the mod. Each panel has how far its rows are open, 0 to 1 (`fold_pos`). `SyncFold`, at the end of the hover
-  hook (and in the refresh hook), moves it towards the fold by the time since its last step (0.1 s for the whole
-  way, `FOLD_SECONDS`) and lays the panel out. The first call after the fold changed only starts the clock.
+  hook (and in the refresh hook), moves it towards the fold by the time since its last step (0.15 s for the whole
+  way, `FOLD_SECONDS`; 0.1 s at first) and lays the panel out. The first call after the fold changed only starts
+  the clock.
 - The layout takes the eased value (smoothstep): the panel's height, the game's four and the booster box are that
   part of the way up. A row under them is at its place from when the game's four have passed half of it, with its
   alpha going from 0 to 1 until they have passed all of it; before that it is far to the right, as when folded.
 - The alpha is the widget's box's, times 0.5 for a locked slot as `SlotWidget_ApplyState` has it (state bit 4), and
   only set on a panel with a strip (the alpha function is the label's code, which the strip needs anyway).
-- No move while the picker has the card (the rows are at the fold at once) and none at a panel's build.
+- No move while the picker has the card (the rows are at the fold at once) and none at a panel's build; none at all
+  with `collapse_animate = off` (on by default).
 - The fold itself (the strip's text, where the focus can go) changes at the press, as before; only the layout
   takes the time.
 
@@ -231,7 +233,7 @@ The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots
 
 ## Still to be seen
 
-The second test covered the frame, the text and the setting. Of the opening and closing over 0.1 s, nothing has
+The second test covered the frame, the text and the setting. Of the opening and closing over a moment, nothing has
 been seen:
 
 1. The card growing and shrinking smoothly: its frame, the equipment row and the READY UP button following the
@@ -246,4 +248,4 @@ And as before:
 
 7. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
 8. Another player's card (co-op): its strip follows the local one and takes no input.
-9. 8, 9 and 20 slots; `collapse = off`; `collapse_rows`.
+9. 8, 9 and 20 slots; `collapse = off`; `collapse_rows`; `collapse_animate = off`.
