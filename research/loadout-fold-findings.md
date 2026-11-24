@@ -4,8 +4,9 @@ Findings behind 0.3.0's fold strip (`more-stratagem-slots/src/stratagem_slots.c`
 25480438; the addresses are RVAs in game.dll (the 2026-11-13 dump's base is 0x7FFCF6030000). Read from the dump on
 2026-11-23, with the mod's session logs where it says so. The strip's first build (a filled bar with "+12" and
 "-12") was run on the 0.5 nightly that day; what that session showed, and what is still to be seen, is at the end.
-**The outline, the "SHOW [+12]" text and the `collapse` setting came after it and have not been seen in game yet**:
-that code compiles (the nightly's zig, no warnings).
+The outline, the "SHOW [+12]" text and the `collapse` setting came after it and passed a second test that day.
+**The rows' opening and closing over 0.1 s came after that and has not been seen in game yet**: that code compiles
+(the nightly's zig, no warnings).
 
 ## The problem
 
@@ -142,7 +143,7 @@ Read from its DLL (`melee_weapon_slot.dll`, MinGW, SDK 13) and its data patch.
   column, left and right leave the card.
 - The picker's move on to an empty extra slot unfolds, and the card stays unfolded when the picker closes.
 
-## Animating the fold (looked at on 2026-11-23, not built)
+## Animating the fold (looked at on 2026-11-23; built the second way)
 
 The rows can open and close over a moment instead of at once, in two ways.
 
@@ -196,6 +197,20 @@ From the mod: about as much code as the strip's outline took, in one place, and 
 The game's tweens would be less code for each frame, but need three more functions of nine arguments checked and
 called, and an answer to what happens to a tween on a node of the mod's when the screen closes.
 
+### What was built
+
+- From the mod. Each panel has how far its rows are open, 0 to 1 (`fold_pos`). `SyncFold`, at the end of the hover
+  hook (and in the refresh hook), moves it towards the fold by the time since its last step (0.1 s for the whole
+  way, `FOLD_SECONDS`) and lays the panel out. The first call after the fold changed only starts the clock.
+- The layout takes the eased value (smoothstep): the panel's height, the game's four and the booster box are that
+  part of the way up. A row under them is at its place from when the game's four have passed half of it, with its
+  alpha going from 0 to 1 until they have passed all of it; before that it is far to the right, as when folded.
+- The alpha is the widget's box's, times 0.5 for a locked slot as `SlotWidget_ApplyState` has it (state bit 4), and
+  only set on a panel with a strip (the alpha function is the label's code, which the strip needs anyway).
+- No move while the picker has the card (the rows are at the fold at once) and none at a panel's build.
+- The fold itself (the strip's text, where the focus can go) changes at the press, as before; only the layout
+  takes the time.
+
 ## The first session (2026-11-23, 0.5 nightly, 16 slots, with Dedicated Melee Slot)
 
 The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots.
@@ -216,13 +231,19 @@ The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots
 
 ## Still to be seen
 
-1. The frame: its lines around the bar, its sides' gap, its colours with the cursor and the focus on the strip.
-2. "SHOW [+12]" and "HIDE [-12]" in the bar, the font's "[" and "]" among them.
-3. The hover holding steady with the cursor on the bar, and clicks landing. Drawing the bar hovered resizes its
-   frame's images, and a node that waits for its layout is not tested for the cursor (the game's rule for a slot);
-   the bar keeps the hover it had meanwhile.
-4. `collapse = off`: no strip, every row shown. `collapse_rows`.
-5. 8 slots: no strip, the card as in 0.2. 9 and 20 slots: "SHOW [+5]" and "SHOW [+16]".
-6. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
-7. Another player's card (co-op): its strip follows the local one and takes no input.
-8. Dedicated Melee Slot's box with 20 slots, folded.
+The second test covered the frame, the text and the setting. Of the opening and closing over 0.1 s, nothing has
+been seen:
+
+1. The card growing and shrinking smoothly: its frame, the equipment row and the READY UP button following the
+   panel's height every frame, not only at the end.
+2. The rows fading in from the bottom one up, and out the other way; a locked slot ending at its half alpha.
+3. A second press while the rows move: they turn round from where they are.
+4. The picker opened right after a press, and its move on into a hidden row: the rows at their places at once.
+5. No slot left faded or out of place after hovering and moving the focus while the rows move.
+6. Dedicated Melee Slot's box moving with the card.
+
+And as before:
+
+7. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
+8. Another player's card (co-op): its strip follows the local one and takes no input.
+9. 8, 9 and 20 slots; `collapse = off`; `collapse_rows`.
