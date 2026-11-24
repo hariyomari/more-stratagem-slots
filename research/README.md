@@ -41,7 +41,7 @@ above four (default 8), for game build 25480438
 
 ### More notes
 
-- `audit-findings.md` (with `audit-part-a.md` and `audit-part-a-findings.md`): the game's lists of 16 and where they
+- `audit-findings.md` (with `audit-part-a-findings.md`): the game's lists of 16 and where they
   are and are not checked. The reason for the pages.
 - `history-callers-findings.md`: the callers of the player history, for the 0.1.2 change that stopped hooking it.
 - `availability-findings.md`: when the game shows and takes a list entry (0x66C920), the input's matching, the HUD
