@@ -10,6 +10,15 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 
 - **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other.
 
+## Preview
+
+<img src="assets/demo/loadout-fill-folded-12.png" width="400">
+<img src="assets/demo/loadout-fill-unfolded-12.png" width="400">
+<img src="assets/demo/loadout-fold-demo-20.gif" width="379">
+
+<img src="assets/demo/stratagem-paged-static-20.png" width="400">
+<img src="assets/demo/stratagem-paged-demo-20.gif" width="588">
+
 ## Installation
 
 1. Download the latest release from the [Releases](https://github.com/hariyomari/more-stratagem-slots/releases/latest) page.
@@ -39,11 +48,11 @@ With the default install location that is `%USERPROFILE%\Documents\HellForge\mod
 
 1. Open the folder HellForge is installed in, then its `mods` folder:
 
-   <img src="images/settings-step1.png" width="600">
+   <img src="assets/settings-tutorial/step1.png" width="600">
 
 2. The settings file is here, beside the mod's zip:
 
-   <img src="images/settings-step2.png" width="600">
+   <img src="assets/settings-tutorial/step2.png" width="600">
 
 The file is created with the defaults the first time you start the game with the mod switched on. Open it with a text editor, change a value and save. Changes apply the next time the game starts.
 
@@ -87,13 +96,6 @@ Don't edit the template where it is, or put the settings file inside the mod's f
 ### The game is stuck at "build mods"
 
 The first time the game starts with a mod that is built from source, HellForge downloads its compiler. This can take a few minutes, and only happens once.
-
-## Screenshots
-
-<img src="images/loadout-empty.png" width="400">
-<img src="images/loadout-full.png" width="310">
-
-<img src="images/stratagem-list.png" width="300">
 
 ## Building
 
