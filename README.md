@@ -52,6 +52,7 @@ The file is created with the defaults the first time you start the game with the
 | `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
 | `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
 | `collapse_rows`     | `3`     | How many rows of four a loadout needs to be collapsed, from 2 to 5. With `3`, a loadout of more than 8 slots is.                                                                                        |
+| `collapse_animate`  | `on`    | Opens and closes the collapsed rows over a moment. With `off` they show and hide at once.                                                                                                               |
 | `page_prev`         | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
 | `page_next`         | `E`     | The key for the next page.                                                                                                                                                                              |
 | `page_wheel`        | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open: wheel up is the next page and wheel down the previous one.                                                                     |
@@ -66,7 +67,7 @@ The game's stratagem list holds 16 at most, including its own (Reinforce, Resupp
 
 ### Upgrading from an older version
 
-`per_row` from before 0.3.0 is no longer read: the rows are always of four. You can leave its line in the file or delete it. To change when the card collapses, add a `collapse_rows` line; to switch the collapsing off, add `collapse = off`.
+`per_row` from before 0.3.0 is no longer read: the rows are always of four. You can leave its line in the file or delete it. To change when the card collapses, add a `collapse_rows` line; to switch the collapsing off, add `collapse = off`; to switch only its animation off, add `collapse_animate = off`.
 
 `page_hold` from before 0.2.0 is no longer read, so you can leave its line in the file or delete it. `page_lock = on` does what it did.
 
