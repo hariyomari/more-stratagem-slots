@@ -305,7 +305,7 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define NODE_UNPLACED 4u
 #define FILL_IMAGE 272u          /* u32: -1, no image */
 #define FRAME_BYTES 2456u        /* the game's frame: its box, six images and where they go */
-#define FRAME_PIECE 272u         /* ... the first image */
+
 #define FRAME_THICKNESS 2432u    /* float: how thick its lines are */
 #define FRAME_SIDE_GAP 2436u     /* float: the gap in the middle of its left and right sides */
 #define STRIP_FILL 272u          /* the strip's memory: the box, the rectangle, the text, the frame */
@@ -640,7 +640,7 @@ static void BuildStrip(Panel* p, uint64_t want, const char* how)
     text_init(text);
     if (g_frame_on) frame_init(frame, LAYER_CARD_FRAME);
     if (Get64(box + NODE_CONTEXT) != want || Get64(fill + NODE_CONTEXT) != want || Get64(text + NODE_CONTEXT) != want ||
-        (g_frame_on && (Get64(frame + NODE_CONTEXT) != want || Get64(frame + FRAME_PIECE + NODE_CONTEXT) != want)))
+        (g_frame_on && Get64(frame + NODE_CONTEXT) != want)) /* (the frame's images are made in the same call) */
     {
         LOG_ONCE(LOG_BUILD, "panel %p (%s): the fold strip got UI context %llx, the game's slots have %llx; no strip, "
                  "every row shows", (void*)p->panel, how, (unsigned long long)Get64(box + NODE_CONTEXT),
@@ -1063,7 +1063,8 @@ static uint64_t HookSetFocus(uint8_t* panel, uint32_t index)
 
 /* The mouse: after the game's own test of its widgets, the same test of the extra slots. With the virtual cursor the
  * game only draws hover (no index); so do the extra slots. The strip is tested the way the game tests the booster box
- * (a box of its own too), on the local player's card only. */
+ * (a box of its own too), on the local player's card only. While the strip waits for its layout it keeps the hover
+ * it had: drawing it hovered changes its frame, and with it the strip would lose the hover that changed it. */
 static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
 {
     uint64_t result = g_hover(panel, unused, cursor_off);
@@ -1086,7 +1087,8 @@ static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
     if (p->strip_ok)
     {
         int over = panel[PANEL_EXPANDED] && !cursor_off && p->pick_row < 0 &&
-                   (Get32(p->strip + NODE_FLAGS) & NODE_UNPLACED) == 0 && cursor_over(cursor, p->strip, 0);
+                   ((Get32(p->strip + NODE_FLAGS) & NODE_UNPLACED) != 0 ? p->strip_hover :
+                    cursor_over(cursor, p->strip, 0));
         if (over != p->strip_hover)
         {
             p->strip_hover = over;
