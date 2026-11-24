@@ -149,7 +149,8 @@ The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots
 - The four panels each got their strip at the build, folded (`fold strip linked, folded`, four lines at one moment).
 - The text shows as soon as the screen opens and fits the 20 px bar: "+12" and "-12" are about 12 px high. So the
   label's font call works in the loadout screen's UI context.
-- A click unfolds and folds, about 40 times in the session. The card's frame follows the panel's height at once: the
+- A click unfolds and folds: at least 36 times in the session (the log's lines for the fold stop at their limit of
+  40, four of them the build's). The card's frame follows the panel's height at once: the
   screenshots show the card's header, the equipment row and the READY UP button in their places both ways.
 - Controller and keyboard: the strip takes the focus and the select button toggles it (seen in the session, not in
   the log).
@@ -162,9 +163,12 @@ The first build; session `b079617999e64f4291432bbe107757d9`, and two screenshots
 ## Still to be seen
 
 1. The frame: its lines around the bar, its sides' gap, its colours with the cursor and the focus on the strip.
-2. "SHOW [+12]" and "HIDE [-12]" in the bar.
-3. `collapse = off`: no strip, every row shown. `collapse_rows`.
-4. 8 slots: no strip, the card as in 0.2. 9 and 20 slots: "SHOW [+5]" and "SHOW [+16]".
-5. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
-6. Another player's card (co-op): its strip follows the local one and takes no input.
-7. Dedicated Melee Slot's box with 20 slots, folded.
+2. "SHOW [+12]" and "HIDE [-12]" in the bar, the font's "[" and "]" among them.
+3. The hover holding steady with the cursor on the bar, and clicks landing. Drawing the bar hovered resizes its
+   frame's images, and a node that waits for its layout is not tested for the cursor (the game's rule for a slot);
+   the bar keeps the hover it had meanwhile.
+4. `collapse = off`: no strip, every row shown. `collapse_rows`.
+5. 8 slots: no strip, the card as in 0.2. 9 and 20 slots: "SHOW [+5]" and "SHOW [+16]".
+6. Leaving the loadout screen and coming back: folded again. (The first session had one visit.)
+7. Another player's card (co-op): its strip follows the local one and takes no input.
+8. Dedicated Melee Slot's box with 20 slots, folded.
