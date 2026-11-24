@@ -25,6 +25,8 @@ By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pa
 
 The controls can be configured in the settings, which get auto-generated on the first launch after installing the mod.
 
+On the loadout screen the slots are in rows of four. With more than 8 slots the card starts collapsed: it shows the first row, and a bar under it with the number of slots it hides (`SHOW [+12]` for 16 slots). Click the bar to show the other rows, and click it again (`HIDE [-12]`) to hide them. On a controller, move down to the bar and press the select button. The card is collapsed again each time you come to the loadout screen, and it opens by itself when the stratagem picker moves on to a slot in a hidden row.
+
 ## Settings
 
 The settings are in `more-stratagem-slots.ini`, directly in your HellForge `mods` folder:
@@ -48,7 +50,8 @@ The file is created with the defaults the first time you start the game with the
 | Setting             | Default | Description                                                                                                                                                                                             |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
-| `per_row`           | `4`     | The number of slots per row on the loadout screen, from 4 to 20.                                                                                                                                        |
+| `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
+| `collapse_rows`     | `3`     | How many rows of four a loadout needs to be collapsed, from 2 to 5. With `3`, a loadout of more than 8 slots is.                                                                                        |
 | `page_prev`         | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
 | `page_next`         | `E`     | The key for the next page.                                                                                                                                                                              |
 | `page_wheel`        | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open: wheel up is the next page and wheel down the previous one.                                                                     |
@@ -62,6 +65,8 @@ A settings file made by an older version doesn't have the newer settings, and th
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
 ### Upgrading from an older version
+
+`per_row` from before 0.3.0 is no longer read: the rows are always of four. You can leave its line in the file or delete it. To change when the card collapses, add a `collapse_rows` line; to switch the collapsing off, add `collapse = off`.
 
 `page_hold` from before 0.2.0 is no longer read, so you can leave its line in the file or delete it. `page_lock = on` does what it did.
 
