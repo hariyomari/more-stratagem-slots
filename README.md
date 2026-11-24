@@ -12,12 +12,16 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 
 ## Preview
 
-<img src="assets/demo/loadout-fill-folded-12.png" width="400">
-<img src="assets/demo/loadout-fill-unfolded-12.png" width="400">
-<img src="assets/demo/loadout-fold-demo-20.gif" width="379">
+<p>
+  <img src="assets/demo/loadout-fill-folded-12.png" width="264">
+  <img src="assets/demo/loadout-fill-unfolded-12.png" width="264">
+  <img src="assets/demo/loadout-fold-demo-20.gif" width="250">
+</p>
 
-<img src="assets/demo/stratagem-paged-static-20.png" width="400">
-<img src="assets/demo/stratagem-paged-demo-20.gif" width="588">
+<p>
+  <img src="assets/demo/stratagem-paged-static-20.png" width="300">
+  <img src="assets/demo/stratagem-paged-demo-20.gif" width="441">
+</p>
 
 ## Installation
 
