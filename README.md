@@ -30,7 +30,7 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 3. Pick the zip. You don't need to unpack it.
 4. Make sure the mod is switched on, then start the game.
 
-You can also drop the zip directly into your HellForge `mods` folder. That is the `mods` folder inside the folder HellForge is installed in, `Documents\HellForge\mods` by default.
+You can also drop the zip directly into your HellForge `mods` folder. That is the `mods` folder inside the folder HellForge is installed in, `%USERPROFILE%\Documents\HellForge\mods` by default.
 
 ## Usage
 
