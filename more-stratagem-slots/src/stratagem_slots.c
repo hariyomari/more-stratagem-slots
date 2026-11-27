@@ -441,7 +441,7 @@ static HfMod* self;
 static uintptr_t game;
 static uint32_t g_slots = 8, g_extra = 4;
 static int g_fold_set = 1;        /* collapse: loadouts of many rows have the fold strip */
-static uint32_t g_fold_rows = 3;  /* collapse_rows: ... those of this many rows or more */
+static uint32_t g_fold_rows = 2;  /* collapse_rows: ... those of this many rows or more */
 static int g_fold_animate = 1;    /* collapse_animate: the rows open and close over FOLD_SECONDS, not at once */
 static int g_fold_on;             /* ... and this one has, and the strip's code matched */
 static int g_frame_on;            /* ... and its outline's */
@@ -588,7 +588,7 @@ static Panel* AddPanel(uint8_t* panel)
 
 /* ---- the fold strip ---------------------------------------------------------------------------------------------- */
 
-/* A loadout of collapse_rows rows or more (3 by default: more than 8 slots) has a strip under its slots, unless
+/* A loadout of collapse_rows rows or more (2 by default: more than 8 slots) has a strip under its slots, unless
  * collapse is off. Folded, the card shows the game's four and the strip, with the number of slots it hides
  * ("SHOW [+12]"); a click on the strip, or the select button with the focus on it, shows the rows under the game's
  * four, above the strip ("HIDE [-12]"), and the same hides them again. So the card is only as tall as its rows while
@@ -3146,7 +3146,7 @@ static const char kDefaultSettings[] =
     "# shows and hides the others. With collapse off, every row always shows. With collapse_animate off, the rows\r\n"
     "# show and hide at once.\r\n"
     "collapse = on\r\n"
-    "collapse_rows = 3\r\n"
+    "collapse_rows = 2\r\n"
     "collapse_animate = on\r\n"
     "\r\n"
     "# Keys for the previous and next page, while the stratagem list is open: a letter, a digit, or a Windows\r\n"
