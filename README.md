@@ -46,7 +46,7 @@ HellForge's sandbox (on by default) doesn't let mods create files, so you make t
 
    <img src="assets/settings-tutorial/step1.png" width="600">
 
-2. Open the mod's zip, which is also in this `mods` folder. Its name depends on where you downloaded it. Go into its `more-stratagem-slots` folder and copy `more-stratagem-slots.template.ini` from there into the `mods` folder. Rename the copy to `more-stratagem-slots.ini`, and it should now sit beside the mod's zip.
+2. Open the mod's zip, which is also in this `mods` folder. Its name depends on where you downloaded it. Copy `more-stratagem-slots.template.ini` from there into the `mods` folder. Rename the copy to `more-stratagem-slots.ini`, and it should now sit beside the mod's zip.
 
    <img src="assets/settings-tutorial/step2.png" width="600">
 
