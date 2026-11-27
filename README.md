@@ -38,7 +38,7 @@ By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pa
 
 The controls can be configured in the settings, which get auto-generated on the first launch after installing the mod.
 
-On the loadout screen the slots are in rows of four. With more than 8 slots the card starts collapsed: it shows the first row, and a bar under it with the number of slots it hides (`SHOW [+12]` for 16 slots). Click the bar to show the other rows, and click it again (`HIDE [-12]`) to hide them. On a controller, move down to the bar and press the select button. The card is collapsed again each time you come to the loadout screen, and it opens by itself when the stratagem picker moves on to a slot in a hidden row.
+On the loadout screen the slots are in rows of four. With 2 or more rows the card starts collapsed: it shows the first row, and a bar under it with the number of slots it hides (SHOW [+12] for 16 slots). Click the bar to show the other rows, and click it again (HIDE [-12]) to hide them.
 
 ## Settings
 
@@ -64,7 +64,7 @@ The file is created with the defaults the first time you start the game with the
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
 | `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
-| `collapse_rows`     | `2`     | How many rows of four a loadout needs to be collapsed, from 2 to 5. With `3`, a loadout of more than 8 slots is.                                                                                        |
+| `collapse_rows`     | `2`     | How many rows of four a loadout needs to be collapsed, from 2 to 5.                                                                                                                                     |
 | `collapse_animate`  | `on`    | Opens and closes the collapsed rows over a moment. With `off` they show and hide at once.                                                                                                               |
 | `page_prev`         | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
 | `page_next`         | `E`     | The key for the next page.                                                                                                                                                                              |
