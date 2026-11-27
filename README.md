@@ -8,7 +8,7 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 
 ## Known incompatibilities
 
-- **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other.
+- **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other, or set `slots = 4`: the mod then leaves the loadout screen alone (not tested together yet).
 
 ## Preview
 
@@ -62,7 +62,7 @@ The file is created with the defaults the first time you start the game with the
 
 | Setting             | Default | Description                                                                                                                                                                                             |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
+| `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20. With 4 the loadout screen stays the game's default, leaving only the paging for what other mods add.                                        |
 | `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
 | `collapse_rows`     | `2`     | How many rows of four a loadout needs to be collapsed, from 2 to 5.                                                                                                                                     |
 | `collapse_animate`  | `on`    | Opens and closes the collapsed rows over a moment. With `off` they show and hide at once.                                                                                                               |
@@ -78,7 +78,11 @@ A settings file made by an older version doesn't have the newer settings, and th
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
+With `slots = 4` the loadout screen stays the game's default, leaving only the paging. When other mods (P.S.S., for example) add stratagems to your list during a mission, those go into pages after your four, with the same keys.
+
 ### Upgrading from an older version
+
+Before 0.3.2 `slots = 4` switched the mod off. Now it keeps the pages for what other mods add (see above). To switch the mod off, switch it off in HellForge.
 
 `per_row` from before 0.3.0 is no longer read: the rows are always of four. You can leave its line in the file or delete it. To change when the card collapses, add a `collapse_rows` line; to switch the collapsing off, add `collapse = off`; to switch only its animation off, add `collapse_animate = off`.
 
