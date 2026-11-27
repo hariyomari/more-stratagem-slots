@@ -13,6 +13,8 @@
  * picks take turns in it a page at a time (Q/E while the list is open); the rest wait in this mod with their uses and
  * cooldowns. See "pages". The page changes at any time: a stratagem in hand stays in the list through the change. See
  * "the stratagem in hand".
+ * Four slots (slots = 4): no extra slots, so the loadout screen is left to the game (none of its hooks go in, and its
+ * code is not checked). The pages and the guards on the limit of 16 still do, for what other mods add to the list.
  *
  * game.dll 25480438; research and RVAs in research/README.md ("The loadout card"):
  *   panel P = card + 23416. P + 36544: the 4 slot widgets (0x12A8 each, type at +0x128C). The panel's fields continue
@@ -136,16 +138,37 @@
                                        * activated. Reads the type of the list's entry `row`, stamps the time on that
                                        * entry (+0x28: the HUD row then shows state 6 for 2 s) and sends the row */
 
+/* The code every slot count needs: the mission's list and its pages, the page label's nodes, the page sound. */
 static const struct { uint32_t rva; const char* pattern; const char* name; } kCode[] = {
+    { RVA_NODE_SET_POSITION, "48 89 5C 24 18 48 89 6C 24 20 48 89 54 24 10 56 57 41 57 48 83 EC 20 F3", "node position" },
+    { RVA_NODE_SET_PIVOT, "48 83 EC 28 F3 0F 10 41 2C 4C 8B C9 48 89 54 24 30 0F 2E 44 24 30 7A 10", "node pivot" },
+    { RVA_NODE_SET_ANCHOR, "48 83 EC 28 F3 0F 10 41 3C 4C 8B C9 48 89 54 24 30 0F 2E 44 24 30 7A 10", "node anchor" },
+    { RVA_NODE_ADD_CHILD, "40 53 48 83 EC 20 4C 8B CA 48 8B D9 48 8B 91 E0 00 00 00 48 85 D2 74 54", "node add child" },
+    { RVA_PLAY_SOUND, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 8B DA", "play sound" },
+    { RVA_AUGMENT, "48 89 5C 24 18 55 56 41 56 48 81 EC 60 06 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4", "loadout additions" },
+    { RVA_HISTORY, "48 8B C4 48 89 58 08 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 D8 F5 FF FF 48 81 EC 80 0B 00 00",
+      "player history" },
+    { RVA_LOAD_ASSETS, "40 55 56 41 57 48 83 EC 30 48 8B F1 4C 89 4C 24 28 45 84 C0 4C 89 74 24 60 48 8D 0D",
+      "player history load" },
+    { RVA_ACTIVATE, "40 55 53 41 54 41 55 41 56 48 8D 6C 24 D1 48 81 EC D0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 "
+      "89 45 FF 4C 8B 15 56 E7 E0 02", "stratagem activation" },
+    { RVA_RESET, "48 89 5C 24 20 48 89 4C 24 08 55 56 57 41 54 41 55 48 83 EC 20 3B 15", "player history reset" },
+    { RVA_LIST_OPEN, "48 8B C4 56 57 48 83 EC 68 0F B6 F2 48 8B F9 38 91 10 77 03 00 0F 84", "stratagem list open" },
+    { RVA_LOCAL_PEER_READ, "48 8B 05 B8 FC BD 01 48 8D 95 F0 02 00 00 48 8B 88 98 B3 00 00", "local player id" },
+    { RVA_COPY_LOADOUT, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 66 0F 6F 05 ?? ?? "
+      "?? ?? 48 8D 8A 50 01 00 00 48 8B 35 E0 AE 11 02", "player history copy" },
+    { RVA_COOLDOWN_TABLE, "4C 8D 2D ?? ?? ?? ?? 48 C1 E7 04", "stratagem cooldown's info table" },
+};
+#define CODE_COUNT (sizeof kCode / sizeof kCode[0])
+
+/* The loadout screen's code: only for the extra slots (slots = 5 or more). At 4 the loadout screen is the game's
+ * own, and the mod neither hooks nor checks it. */
+static const struct { uint32_t rva; const char* pattern; const char* name; } kLoadoutCode[] = {
     { RVA_REFRESH, "40 55 56 41 54 41 55 48 8D AC 24 78 F0 FF FF B8 88 10 00 00 E8 ?? ?? ?? ?? 48 2B E0", "refresh" },
     { RVA_BUILD_PANEL, "48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC B0", "build panel" },
     { RVA_COMMIT, "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 50 0A 00 00 48 8B 05 ?? ?? ?? ?? 48 33", "commit" },
     { RVA_WIDGET_INIT, "48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 41 56 41 57 48 8B EC 48", "slot widget init" },
     { RVA_WIDGET_SET_TYPE, "48 89 5C 24 08 57 48 83 EC 20 8B FA 48 8D 99 80 03 00 00 89 B9 8C 12 00", "slot widget set type" },
-    { RVA_NODE_SET_POSITION, "48 89 5C 24 18 48 89 6C 24 20 48 89 54 24 10 56 57 41 57 48 83 EC 20 F3", "node position" },
-    { RVA_NODE_SET_PIVOT, "48 83 EC 28 F3 0F 10 41 2C 4C 8B C9 48 89 54 24 30 0F 2E 44 24 30 7A 10", "node pivot" },
-    { RVA_NODE_SET_ANCHOR, "48 83 EC 28 F3 0F 10 41 3C 4C 8B C9 48 89 54 24 30 0F 2E 44 24 30 7A 10", "node anchor" },
-    { RVA_NODE_ADD_CHILD, "40 53 48 83 EC 20 4C 8B CA 48 8B D9 48 8B 91 E0 00 00 00 48 85 D2 74 54", "node add child" },
     { RVA_NODE_SET_SIZE, "48 89 5C 24 18 48 89 6C 24 20 48 89 54 24 10 56 57 41 57 48 83 EC 20 F3", "node size" },
     { RVA_SPECIAL_MODE, "40 53 48 81 EC 50 08 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4", "special mode" },
     { RVA_HOVER, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 41 0F B6 E8 48 8D 99 F8", "hover" },
@@ -156,29 +179,15 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kCo
     { RVA_CLOSE_PICKER, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 0F B6", "close picker" },
     { RVA_PICKER_INPUT, "48 89 5C 24 10 48 89 6C 24 18 56 57 41 55 41 56 41 57 48 83 EC 50 48 8B F9 48 8B EA", "picker input" },
     { RVA_STABLE_TO_TYPE, "85 C9 74 65 BA 01 00 00 00 4C 8D 0D ?? ?? ?? ?? 44 8B C2 4D 8B D1", "stable id to type" },
-    { RVA_PLAY_SOUND, "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 05 ?? ?? ?? ?? 8B DA", "play sound" },
     { RVA_INPUT_INDEX, "83 F9 0C 77 1D 4C 8D 05 ?? ?? ?? ?? 8B C1 41 8B 94 80", "input index" },
     { RVA_NAV_DIR, "40 53 48 83 EC 20 48 8B D9 48 B9 00 00 00 00 04 00 00 00 E8", "navigation direction" },
     { RVA_CURSOR_OVER, "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 4C 8B 0D ?? ?? ?? ?? 48 8B", "cursor over" },
     { RVA_APPLY_STATE, "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 50 48 8B 05 ?? ?? ?? ?? 48 33", "slot widget state" },
     { RVA_IS_HOVERED, "40 53 48 83 EC 20 48 8B D9 0F B7 89 88 12 00 00 0F B6 C1 C0 E8 02 A8 01", "slot widget hovered" },
-    { RVA_AUGMENT, "48 89 5C 24 18 55 56 41 56 48 81 EC 60 06 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4", "loadout additions" },
-    { RVA_HISTORY, "48 8B C4 48 89 58 08 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 D8 F5 FF FF 48 81 EC 80 0B 00 00",
-      "player history" },
     { RVA_BROADCAST_COMMIT, "48 8D 8B 78 5B 00 00 E8 47 94 FF FF 48 8B 93 F0 ED 01 00", "lobby broadcast's commit" },
-    { RVA_LOAD_ASSETS, "40 55 56 41 57 48 83 EC 30 48 8B F1 4C 89 4C 24 28 45 84 C0 4C 89 74 24 60 48 8D 0D",
-      "player history load" },
-    { RVA_ACTIVATE, "40 55 53 41 54 41 55 41 56 48 8D 6C 24 D1 48 81 EC D0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 "
-      "89 45 FF 4C 8B 15 56 E7 E0 02", "stratagem activation" },
-    { RVA_RESET, "48 89 5C 24 20 48 89 4C 24 08 55 56 57 41 54 41 55 48 83 EC 20 3B 15", "player history reset" },
-    { RVA_LIST_OPEN, "48 8B C4 56 57 48 83 EC 68 0F B6 F2 48 8B F9 38 91 10 77 03 00 0F 84", "stratagem list open" },
-    { RVA_LOCAL_PEER_READ, "48 8B 05 B8 FC BD 01 48 8D 95 F0 02 00 00 48 8B 88 98 B3 00 00", "local player id" },
-    { RVA_COPY_LOADOUT, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 66 0F 6F 05 ?? ?? "
-      "?? ?? 48 8D 8A 50 01 00 00 48 8B 35 E0 AE 11 02", "player history copy" },
     { RVA_SCREEN_CARDS, "48 8D B7 ?? ?? ?? ??", "loadout screen's cards" },
-    { RVA_COOLDOWN_TABLE, "4C 8D 2D ?? ?? ?? ?? 48 C1 E7 04", "stratagem cooldown's info table" },
 };
-#define CODE_COUNT (sizeof kCode / sizeof kCode[0])
+#define LOADOUT_CODE_COUNT (sizeof kLoadoutCode / sizeof kLoadoutCode[0])
 
 /* The page label's code: without it the pages still work, with no label. */
 static const struct { uint32_t rva; const char* pattern; const char* name; } kLabelCode[] = {
@@ -3140,6 +3149,7 @@ static const char kDefaultSettings[] =
     "# More Stratagem Slots settings. Changes apply the next time the game starts.\r\n"
     "\r\n"
     "# Stratagem slots in the loadout, 4 to 20. Those that don't fit in the game's stratagem list are split into pages.\r\n"
+    "# With 4 the loadout screen is the game's own, and the pages are only for what other mods add (P.S.S.).\r\n"
     "slots = 8\r\n"
     "\r\n"
     "# Loadout screen: a loadout of collapse_rows rows of four or more (2 to 5) shows its first row, and a bar that\r\n"
@@ -3320,8 +3330,8 @@ static void InstallHooks(HfMod* mod)
 {
     g_hook_tried = 1;
     ULONGLONG started = GetTickCount64();
-    /* The guards on the game's limit of 16 first, then the commit, so the record keeps its extra slots from the first
-     * refresh on. */
+    /* The guards on the game's limit of 16 and the pages first, then (with extra slots) the commit, so the record keeps
+     * its extra slots from the first refresh on. At slots = 4 only the first: the loadout screen stays the game's. */
     static const struct { uint32_t rva; void* detour; void** original; } hooks[] = {
         { RVA_AUGMENT, (void*)Augment, (void**)&g_augment },
         { RVA_RESET, (void*)Reset, (void**)&g_reset },
@@ -3329,6 +3339,8 @@ static void InstallHooks(HfMod* mod)
         { RVA_ACTIVATE, (void*)Activate, (void**)&g_activate },
         { RVA_LIST_OPEN, (void*)ListOpen, (void**)&g_list_open },
         { RVA_COPY_LOADOUT, (void*)CopyLoadout, (void**)&g_copy_loadout },
+    };
+    static const struct { uint32_t rva; void* detour; void** original; } loadout_hooks[] = {
         { RVA_COMMIT, (void*)Commit, (void**)&g_commit },
         { RVA_BUILD_PANEL, (void*)BuildPanel, (void**)&g_build_panel },
         { RVA_REFRESH, (void*)Refresh, (void**)&g_refresh },
@@ -3342,6 +3354,9 @@ static void InstallHooks(HfMod* mod)
     };
     for (uint32_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++)
         if (hf->hook(mod, game + hooks[i].rva, hooks[i].detour, hooks[i].original) != 0) return; /* the log says why */
+    for (uint32_t i = 0; i < sizeof loadout_hooks / sizeof loadout_hooks[0] && g_extra != 0; i++)
+        if (hf->hook(mod, game + loadout_hooks[i].rva, loadout_hooks[i].detour, loadout_hooks[i].original) != 0)
+            return; /* the log says why */
     g_label_ok = g_label_code &&
                  hf->hook(mod, game + RVA_LIST_UPDATE, (void*)ListUpdate, (void**)&g_list_update) == 0;
     int eagles = g_eagle_code;
@@ -3370,9 +3385,11 @@ static void InstallHooks(HfMod* mod)
     if (g_park_ok) g_available = (AvailableFn)(game + RVA_AVAILABLE);
     if (g_ticking) StartWheel();
     g_hooked = 1;
-    hf->log(mod, "ready (hooks in after %u ms): %u stratagem slots, fold strip %s, page label %s, Eagles across pages %s, "
-            "mouse wheel %s, parking %s, pages %s, thrown stratagem's end %s",
-            (unsigned)(GetTickCount64() - started), g_slots, !g_fold_on ? "off" : g_frame_on ? "on" : "on (no outline)",
+    hf->log(mod, "ready (hooks in after %u ms): %u stratagem slots%s, fold strip %s, page label %s, Eagles across pages "
+            "%s, mouse wheel %s, parking %s, pages %s, thrown stratagem's end %s",
+            (unsigned)(GetTickCount64() - started), g_slots,
+            g_extra == 0 ? " (the game's loadout screen; pages for what other mods add)" : "",
+            !g_fold_on ? "off" : g_frame_on ? "on" : "on (no outline)",
             g_label_ok ? "on" : "off",
             g_eagles_ok ? "on" : "off", g_wheel_thread != NULL ? "on" : "off", g_park_ok ? "on" : "off",
             Following() ? "follow a stratagem in hand" : "locked while a stratagem is in hand or being called in",
@@ -3391,6 +3408,13 @@ static void GameLoaded(HfMod* mod, HfEvent event, void* user)
         {
             hf->log(mod, "the game's %s (0x%X) is not the code this mod knows (another game build?); nothing changed",
                     kCode[i].name, kCode[i].rva);
+            return;
+        }
+    for (uint32_t i = 0; i < LOADOUT_CODE_COUNT && g_extra != 0; i++)
+        if (!hf->code_matches(game + kLoadoutCode[i].rva, kLoadoutCode[i].pattern))
+        {
+            hf->log(mod, "the game's %s (0x%X) is not the code this mod knows (another game build?); nothing changed",
+                    kLoadoutCode[i].name, kLoadoutCode[i].rva);
             return;
         }
     widget_init = (WidgetInitFn)(game + RVA_WIDGET_INIT);
@@ -3503,10 +3527,9 @@ HF_MOD_EXPORT int hellforge_mod_init(const HfApi* api, HfMod* mod)
     g_rows = (g_slots - 1) / PER_ROW;
     g_fold_rows = Clamp(g_fold_rows, 2, MAX_SLOTS / PER_ROW);
     g_fold_wanted = g_fold_set && g_rows + 1 >= g_fold_rows;
-    if (g_extra == 0)
-    {
-        hf->log(mod, "slots = 4: nothing to do");
-        return 0;
-    }
+    /* slots = 4: no extra slots, so the loadout screen is left to the game (no hooks there, see InstallHooks); the
+     * pages still take in what other mods add to the list during a mission (P.S.S.), and the guards on the game's
+     * limit of 16 still hold */
+    if (g_extra == 0) hf->log(mod, "slots = 4: the game's loadout screen; pages only for what other mods add");
     return api->on(mod, HF_EVENT_GAME_LOADED, GameLoaded, NULL) == 0 ? 0 : 1; /* on: 0 on success */
 }
