@@ -65,14 +65,14 @@ With the sandbox off, the mod creates `more-stratagem-slots.ini` with the defaul
 | `page_wheel`        | `on`    | Allows the mouse wheel to switch pages while the stratagem list is open: wheel up is the next page and wheel down the previous one.                                                                     |
 | `page_wheel_invert` | `off`   | Turns the mouse wheel around: wheel up is the previous page and wheel down the next one. Only takes effect with `page_wheel` on.                                                                        |
 | `page_lock`         | `off`   | Stops you from switching pages while a stratagem is in your hand or being called in. With `off` you can switch at any time, and a stratagem in your hand stays in the list until it has been called in. |
-| `page_added`        | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours.       |
+| `page_added`        | `on`    | Puts stratagems that other mods add to your list during a mission in the pages after your own. With `off` they stay on every page, which leaves less room for yours.                                    |
 | `page_rearm`        | `on`    | Shows Eagle Rearm on every page once an Eagle has spent a use, so you can rearm from any page. With `off` it only shows on the pages that hold an Eagle. Either way it rearms the Eagles on every page. |
 
 A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or, with the game closed, replace the file with a fresh copy of the template from the mod's zip, which has every setting. With the sandbox off, deleting the file is enough, and the mod writes a new one the next time the game starts.
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
-With `slots = 4` the loadout screen stays the game's default, leaving only the paging. When other mods (P.S.S., for example) add stratagems to your list during a mission, those go into pages after your four, with the same keys.
+With `slots = 4` the loadout screen stays the game's default, leaving only the paging. When other mods add stratagems to your list during a mission, those go into pages after your four, with the same keys.
 
 ### Upgrading from an older version
 
