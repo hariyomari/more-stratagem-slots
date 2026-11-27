@@ -4,7 +4,7 @@
 
 A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to bring up to a maximum of 20 stratagems. It reuses the existing stratagem widget on the loadout screen for seamless selection.
 
-**Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and on the 0.5 nightly of 2026-11-23, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+**Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and 0.5.0-beta, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
 
 ## Known incompatibilities
 
@@ -30,7 +30,7 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 3. Pick the zip. You don't need to unpack it.
 4. Make sure the mod is switched on, then start the game.
 
-You can also drop the zip directly into your HellForge `mods` folder. That is the `mods` folder inside the folder HellForge is installed in, `Documents\HellForge\mods` by default.
+You can also drop the zip directly into your HellForge `mods` folder. That is the `mods` folder inside the folder HellForge is installed in, `%USERPROFILE%\Documents\HellForge\mods` by default.
 
 ## Usage
 
@@ -64,7 +64,7 @@ The file is created with the defaults the first time you start the game with the
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20.                                                                                                                                             |
 | `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
-| `collapse_rows`     | `3`     | How many rows of four a loadout needs to be collapsed, from 2 to 5. With `3`, a loadout of more than 8 slots is.                                                                                        |
+| `collapse_rows`     | `2`     | How many rows of four a loadout needs to be collapsed, from 2 to 5. With `3`, a loadout of more than 8 slots is.                                                                                        |
 | `collapse_animate`  | `on`    | Opens and closes the collapsed rows over a moment. With `off` they show and hide at once.                                                                                                               |
 | `page_prev`         | `Q`     | The key for the previous page, while the stratagem list is open. A letter, a digit, or a Windows virtual-key code.                                                                                      |
 | `page_next`         | `E`     | The key for the next page.                                                                                                                                                                              |
@@ -92,7 +92,7 @@ From 0.2.0 wheel up is the next page and wheel down the previous one, the other 
 
 The file is created the first time the game starts with the mod switched on. If it is missing:
 
-1. Check on the launcher's Mods page that the mod is listed and switched on, and that your HellForge is up to date (the mod needs 0.4.0-beta or later, and is tested on 0.4.0-beta and on the 0.5 nightly of 2026-11-23). If the mod didn't start, it can't create the file.
+1. Check on the launcher's Mods page that the mod is listed and switched on, and that your HellForge is up to date (the mod needs 0.4.0-beta or later, and is tested on 0.4.0-beta and 0.5.0-beta). If the mod didn't start, it can't create the file.
 2. Or create it yourself: copy [`more-stratagem-slots.template.ini`](more-stratagem-slots/more-stratagem-slots.template.ini) (it is also inside the zip) into the `mods` folder and rename it to `more-stratagem-slots.ini`. The template holds the defaults.
 
 Don't edit the template where it is, or put the settings file inside the mod's folder: the mod only reads `mods\more-stratagem-slots.ini`.

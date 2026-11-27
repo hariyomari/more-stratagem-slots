@@ -44,6 +44,8 @@
 #define RVA_STRATAGEM_INFO 0x37CB600u /* StratagemInfo* [type] */
 #define RVA_G_STRATAGEM_ROWS 0x348E3FCu /* u32: the info rows the game loaded (149). With mods' stratagems HellForge
                                          * writes the number of types there (the game's 150 and the mods') */
+#define RVA_COOLDOWN_TABLE 0x135C312u /* lea r13, [the stratagem info table]: HellForge moves the table for stratagem
+                                       * mods and patches this lea, so the table is read from it */
 /* focus and picking */
 #define RVA_HOVER 0x1894BC0u          /* (P, _, cursor off): per frame, which widget the cursor is over -> P + 55656 */
 #define RVA_NAV 0x18950B0u            /* (P, input, _, nav on): directions and the click; 2/1 open the picker */
@@ -98,8 +100,6 @@
  * cooldown starting on an Eagle gives every other Eagle in the list the same end; one starting on Eagle Rearm also
  * refills their uses. */
 #define RVA_COOLDOWN 0x135C2C0u       /* PlayerHistory_StartStratagemCooldown(history, peer, slot, set start, seconds) */
-#define RVA_COOLDOWN_TABLE 0x135C312u /* lea r13, [the stratagem info table]: HellForge moves the table for stratagem
-                                       * mods and patches this lea, so the table is read from it */
 #define RVA_COOLDOWN_TIME 0x135C351u  /* mov rax, [game + RVA_G_CLOCK]; mov rcx, [rax + 0x18] */
 #define RVA_G_CLOCK 0x3326348u        /* pointer; +0x18 u64 the game's clock in microseconds */
 #define RVA_COOLDOWN_SYSTEMS 0xB9A6D0u /* PlayerHistory_SetStratagemCooldown(peer, slot, set start, seconds): the same
@@ -176,6 +176,7 @@ static const struct { uint32_t rva; const char* pattern; const char* name; } kCo
     { RVA_COPY_LOADOUT, "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 66 0F 6F 05 ?? ?? "
       "?? ?? 48 8D 8A 50 01 00 00 48 8B 35 E0 AE 11 02", "player history copy" },
     { RVA_SCREEN_CARDS, "48 8D B7 ?? ?? ?? ??", "loadout screen's cards" },
+    { RVA_COOLDOWN_TABLE, "4C 8D 2D ?? ?? ?? ?? 48 C1 E7 04", "stratagem cooldown's info table" },
 };
 #define CODE_COUNT (sizeof kCode / sizeof kCode[0])
 
@@ -209,7 +210,6 @@ static const char kFrameLayoutCode[] = "48 89 5C 24 18 55 56 57 48 83 EC 20 F3 0
 static const struct { uint32_t rva; const char* pattern; const char* name; } kEagleCode[] = {
     { RVA_COOLDOWN, "40 53 41 54 41 57 48 83 EC 40 48 8B D9 45 8B E0 33 C9 4C 8B FA 44 8B 93 00 D2 02 00",
       "stratagem cooldown" },
-    { RVA_COOLDOWN_TABLE, "4C 8D 2D ?? ?? ?? ?? 48 C1 E7 04", "stratagem cooldown's info table" },
     { RVA_COOLDOWN_TIME, "48 8B 05 F0 9F FC 01 48 8B 48 18 48 89 8C 1F D0 01 00 00", "stratagem cooldown's clock" },
     { RVA_COOLDOWN_SYSTEMS, "48 8B C4 44 88 40 18 89 50 10 56 41 54 41 55 48 81 EC C0 00 00 00 48 8B 35",
       "stratagem cooldown (systems)" },
@@ -330,7 +330,8 @@ static const char kBallEndedCode[] = "41 56 48 83 EC 50 3B 15 ?? ?? ?? ?? 4D 8B 
 #define LOADOUT_MAX 32u
 #define LOADOUT_SIZE 2544u       /* the screen keeps its records 2544 bytes apart; the commit reads up to +0x9E8 */
 
-#define STRATAGEM_TYPES 0x96u
+#define INFO_VANILLA 150u        /* the types of the game's own info table (0..149) */
+#define INFO_MOVED 198u          /* the least a table moved by HellForge holds: the game's 150 and room for 48 more */
 #define INFO_FLAGS 128u          /* the refresh shows a type only with bit 2 set here */
 
 #define GAME_SLOTS 4u
@@ -440,7 +441,7 @@ static HfMod* self;
 static uintptr_t game;
 static uint32_t g_slots = 8, g_extra = 4;
 static int g_fold_set = 1;        /* collapse: loadouts of many rows have the fold strip */
-static uint32_t g_fold_rows = 3;  /* collapse_rows: ... those of this many rows or more */
+static uint32_t g_fold_rows = 2;  /* collapse_rows: ... those of this many rows or more */
 static int g_fold_animate = 1;    /* collapse_animate: the rows open and close over FOLD_SECONDS, not at once */
 static int g_fold_on;             /* ... and this one has, and the strip's code matched */
 static int g_frame_on;            /* ... and its outline's */
@@ -587,7 +588,7 @@ static Panel* AddPanel(uint8_t* panel)
 
 /* ---- the fold strip ---------------------------------------------------------------------------------------------- */
 
-/* A loadout of collapse_rows rows or more (3 by default: more than 8 slots) has a strip under its slots, unless
+/* A loadout of collapse_rows rows or more (2 by default: more than 8 slots) has a strip under its slots, unless
  * collapse is off. Folded, the card shows the game's four and the strip, with the number of slots it hides
  * ("SHOW [+12]"); a click on the strip, or the select button with the focus on it, shows the rows under the game's
  * four, above the strip ("HIDE [-12]"), and the same hides them again. So the card is only as tall as its rows while
@@ -837,11 +838,29 @@ static Panel* ReadyPanel(uint8_t* panel, const char* how)
     return p != NULL && p->built ? p : NULL;
 }
 
+/* A type's info row from the table the game uses, or NULL. The lea names the table: the game's own, of INFO_VANILLA
+ * types, unless a mod adds stratagems. Then HellForge has moved it (and patched the lea) to one with room for
+ * INFO_MOVED types (0.4) or more (0.5: 1,024 more than the game's), and RVA_G_STRATAGEM_ROWS holds how many it has.
+ * 0.5 keeps that number there; on 0.4 the game sets it back to 149 when it loads its stratagem settings again. */
+static const uint8_t* Info(uint32_t type)
+{
+    const uint8_t* lea = (const uint8_t*)(game + RVA_COOLDOWN_TABLE);
+    int32_t disp;
+    memcpy(&disp, lea + 3, 4);
+    const uint8_t* const* table = (const uint8_t* const*)(lea + 7 + disp);
+    uint32_t types = INFO_VANILLA;
+    if ((uintptr_t)table != game + RVA_STRATAGEM_INFO)
+    {
+        types = Get32((const uint8_t*)(game + RVA_G_STRATAGEM_ROWS));
+        if (types < INFO_MOVED) types = INFO_MOVED;
+    }
+    return type != 0 && type < types ? table[type] : NULL;
+}
+
 /* Would the refresh show this type? (its own filter: a known type with the flag, not 77 or 90 in the special mode) */
 static int Shown(uint32_t type)
 {
-    if (type == 0 || type >= STRATAGEM_TYPES) return 0;
-    const uint8_t* info = *(uint8_t* const*)(game + RVA_STRATAGEM_INFO + 8u * type);
+    const uint8_t* info = Info(type);
     if (info == NULL || (info[INFO_FLAGS] & 2) == 0) return 0;
     if ((type == 77 || type == 90) && special_mode()) return 0;
     return 1;
@@ -1426,14 +1445,12 @@ static uint32_t PageEnd(uint32_t page)
     return end < g_pager.items ? end : g_pager.items;
 }
 
-static const uint8_t* Info(uint32_t type); /* with the Eagles */
-
 /* A stratagem a player can put in a loadout: a stable id, and the flag the loadout's own refresh shows a type by. The
  * mission's own (Reinforce, Resupply, Eagle Rearm, objective stratagems) are not. */
 #define INFO_STABLE 4u
 static int Selectable(uint32_t type)
 {
-    const uint8_t* info = g_eagles_ok ? Info(type) : NULL;
+    const uint8_t* info = Info(type);
     return info != NULL && Get32(info + INFO_STABLE) != 0 && (Get32(info + INFO_FLAGS) & 2) != 0;
 }
 
@@ -1461,7 +1478,7 @@ static int Parkable(uint32_t type)
     case 49u:  /* Eagle Rearm: the game starts it by itself when the Eagles are spent */
         return 0;
     }
-    return g_eagles_ok && Info(type) != NULL && !Selectable(type);
+    return Info(type) != NULL && !Selectable(type);
 }
 
 /* The parked entries that are in the list: each one's row (or -1), by type among the rows not taken, which it takes.
@@ -1584,8 +1601,6 @@ static uint32_t FitPages(const uint8_t* list)
 #define CALL_HOLD_US 2000000ull  /* after a call-in ends its row flashes 1.5 s ("activating") */
 #define TYPE_EAGLE_REARM 49u
 #define INFO_LINKED 200u         /* u32: the type it brings along (an Eagle's is Eagle Rearm) */
-#define INFO_VANILLA 150u        /* the types of the game's own info table (0..149) */
-#define INFO_MOVED 198u          /* the least a table moved by HellForge holds: the game's 150 and room for 48 more */
 
 static uint64_t g_view_until;    /* the HUD rows are logged until then, after a page change */
 
@@ -2485,25 +2500,6 @@ static void RearmTick(void)
  * they count when the game asks whether any Eagle still has uses left (it starts the rearm by itself when none has) or
  * whether any is below its full uses. */
 
-/* A type's info row from the table the game uses, or NULL. The lea names the table: the game's own, of INFO_VANILLA
- * types, unless a mod adds stratagems. Then HellForge has moved it (and patched the lea) to one with room for
- * INFO_MOVED types (0.4) or more (0.5: 1,024 more than the game's), and RVA_G_STRATAGEM_ROWS holds how many it has.
- * 0.5 keeps that number there; on 0.4 the game sets it back to 149 when it loads its stratagem settings again. */
-static const uint8_t* Info(uint32_t type)
-{
-    const uint8_t* lea = (const uint8_t*)(game + RVA_COOLDOWN_TABLE);
-    int32_t disp;
-    memcpy(&disp, lea + 3, 4);
-    const uint8_t* const* table = (const uint8_t* const*)(lea + 7 + disp);
-    uint32_t types = INFO_VANILLA;
-    if ((uintptr_t)table != game + RVA_STRATAGEM_INFO)
-    {
-        types = Get32((const uint8_t*)(game + RVA_G_STRATAGEM_ROWS));
-        if (types < INFO_MOVED) types = INFO_MOVED;
-    }
-    return type != 0 && type < types ? table[type] : NULL;
-}
-
 static int IsEagle(uint32_t type)
 {
     const uint8_t* info = Info(type);
@@ -3150,7 +3146,7 @@ static const char kDefaultSettings[] =
     "# shows and hides the others. With collapse off, every row always shows. With collapse_animate off, the rows\r\n"
     "# show and hide at once.\r\n"
     "collapse = on\r\n"
-    "collapse_rows = 3\r\n"
+    "collapse_rows = 2\r\n"
     "collapse_animate = on\r\n"
     "\r\n"
     "# Keys for the previous and next page, while the stratagem list is open: a letter, a digit, or a Windows\r\n"
