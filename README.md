@@ -36,7 +36,7 @@ You can also drop the zip directly into your HellForge `mods` folder. That is th
 
 By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pages. If you have multiple pages, you should see `the current page number/the max page number` in the top right of the stratagem list.
 
-The controls can be configured in the settings, which get auto-generated on the first launch after installing the mod.
+The controls can be configured in the settings (see [Settings](#settings)).
 
 On the loadout screen the slots are in rows of four. With 2 or more rows the card starts collapsed: it shows the first row, and a bar under it with the number of slots it hides (SHOW [+12] for 16 slots). Click the bar to show the other rows, and click it again (HIDE [-12]) to hide them.
 
@@ -50,15 +50,21 @@ The settings are in `more-stratagem-slots.ini`, directly in your HellForge `mods
 
 With the default install location that is `%USERPROFILE%\Documents\HellForge\mods\more-stratagem-slots.ini`. It sits beside the mod's zip, not inside the mod's own folder (the one with `hellforge-mod.json` and `src`).
 
+HellForge's sandbox (on by default) doesn't let mods create files, so you make the settings file yourself from the template that comes with the mod. With the game closed:
+
 1. Open the folder HellForge is installed in, then its `mods` folder:
 
    <img src="assets/settings-tutorial/step1.png" width="600">
 
-2. The settings file is here, beside the mod's zip:
+2. Open the mod's zip (in this `mods` folder; its name depends on where you downloaded it), go into its `more-stratagem-slots` folder and copy `more-stratagem-slots.template.ini` from there into the `mods` folder. Rename the copy to `more-stratagem-slots.ini`. It should now sit beside the mod's zip:
 
    <img src="assets/settings-tutorial/step2.png" width="600">
 
-The file is created with the defaults the first time you start the game with the mod switched on. Open it with a text editor, change a value and save. Changes apply the next time the game starts.
+3. Open `more-stratagem-slots.ini` with a text editor, change a value and save. Changes apply the next time the game starts.
+
+The template holds the defaults, so a copy left unchanged plays the same as no file at all.
+
+With the sandbox off, the mod creates `more-stratagem-slots.ini` with the defaults the first time the game starts with the mod switched on, and you can skip step 2.
 
 | Setting             | Default | Description                                                                                                                                                                                             |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -74,7 +80,7 @@ The file is created with the defaults the first time you start the game with the
 | `page_added`        | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours.       |
 | `page_rearm`        | `on`    | Shows Eagle Rearm on every page once an Eagle has spent a use, so you can rearm from any page. With `off` it only shows on the pages that hold an Eagle. Either way it rearms the Eagles on every page. |
 
-A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or delete the file while the game is closed, and the mod writes a new one with every setting the next time the game starts. The mod can't add to an existing file itself, because HellForge keeps the files in `mods` read-only while the game runs.
+A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or, with the game closed, replace the file with a fresh copy of the template from the mod's zip, which has every setting. With the sandbox off, deleting the file is enough: the mod writes a new one the next time the game starts. The mod can't add to an existing file itself, because HellForge keeps the files in `mods` read-only while the game runs.
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
@@ -94,12 +100,7 @@ From 0.2.0 wheel up is the next page and wheel down the previous one, the other 
 
 ### The settings file isn't there
 
-The file is created the first time the game starts with the mod switched on. If it is missing:
-
-1. Check on the launcher's Mods page that the mod is listed and switched on, and that your HellForge is up to date (the mod needs 0.4.0-beta or later, and is tested on 0.4.0-beta and 0.5.0-beta). If the mod didn't start, it can't create the file.
-2. Or create it yourself: copy [`more-stratagem-slots.template.ini`](more-stratagem-slots/more-stratagem-slots.template.ini) (it is also inside the zip) into the `mods` folder and rename it to `more-stratagem-slots.ini`. The template holds the defaults.
-
-Don't edit the template where it is, or put the settings file inside the mod's folder: the mod only reads `mods\more-stratagem-slots.ini`.
+Settings file missing? HellForge's sandbox (on by default) doesn't let mods create files, so the mod can't make it for you. With the game closed, copy more-stratagem-slots.template.ini from the mod's zip into your HellForge mods folder and rename it to more-stratagem-slots.ini. The mod reads it the next time the game starts.
 
 ### The game is stuck at "build mods"
 
