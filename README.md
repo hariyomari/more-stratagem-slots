@@ -6,10 +6,6 @@ A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to br
 
 **Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and 0.5.0-beta, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
 
-## Known incompatibilities
-
-- **[DiverKit](https://ayakamods.com/mods/diverkit.4165/)** (loadout presets): it does not load while this mod is on, so its preset buttons never appear. DiverKit checks parts of the game's loadout screen code before it starts, and this mod changes three of them. Use one or the other, or set `slots = 4`: the mod then leaves the loadout screen alone (not tested together yet).
-
 ## Preview
 
 <p>
@@ -34,7 +30,7 @@ You can also drop the zip directly into your HellForge `mods` folder. That is th
 
 ## Usage
 
-By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pages. If you have multiple pages, you should see `the current page number/the max page number` in the top right of the stratagem list.
+By default, you can press Q/E or MWHEEL UP/DOWN to scroll through the list of pages. If you have more than one page, the page you're on shows in the top right of the stratagem list, such as `1/3`.
 
 The controls can be configured in the settings (see [Settings](#settings)).
 
@@ -42,33 +38,25 @@ On the loadout screen the slots are in rows of four. With 2 or more rows the car
 
 ## Settings
 
-The settings are in `more-stratagem-slots.ini`, directly in your HellForge `mods` folder:
+The settings are in `more-stratagem-slots.ini` in your HellForge `mods` folder, which is `%USERPROFILE%\Documents\HellForge\mods` with the default install location.
 
-```
-<your HellForge folder>\mods\more-stratagem-slots.ini
-```
+HellForge's sandbox (on by default) doesn't let mods create files, so you make the settings file yourself from the template that comes with the mod. Close the game first.
 
-With the default install location that is `%USERPROFILE%\Documents\HellForge\mods\more-stratagem-slots.ini`. It sits beside the mod's zip, not inside the mod's own folder (the one with `hellforge-mod.json` and `src`).
-
-HellForge's sandbox (on by default) doesn't let mods create files, so you make the settings file yourself from the template that comes with the mod. With the game closed:
-
-1. Open the folder HellForge is installed in, then its `mods` folder:
+1. Open the folder HellForge is installed in, then its `mods` folder.
 
    <img src="assets/settings-tutorial/step1.png" width="600">
 
-2. Open the mod's zip (in this `mods` folder; its name depends on where you downloaded it), go into its `more-stratagem-slots` folder and copy `more-stratagem-slots.template.ini` from there into the `mods` folder. Rename the copy to `more-stratagem-slots.ini`. It should now sit beside the mod's zip:
+2. Open the mod's zip, which is also in this `mods` folder. Its name depends on where you downloaded it. Go into its `more-stratagem-slots` folder and copy `more-stratagem-slots.template.ini` from there into the `mods` folder. Rename the copy to `more-stratagem-slots.ini`, and it should now sit beside the mod's zip.
 
    <img src="assets/settings-tutorial/step2.png" width="600">
 
 3. Open `more-stratagem-slots.ini` with a text editor, change a value and save. Changes apply the next time the game starts.
 
-The template holds the defaults, so a copy left unchanged plays the same as no file at all.
-
 With the sandbox off, the mod creates `more-stratagem-slots.ini` with the defaults the first time the game starts with the mod switched on, and you can skip step 2.
 
 | Setting             | Default | Description                                                                                                                                                                                             |
 | ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20. With 4 the loadout screen stays the game's default, leaving only the paging for what other mods add.                                        |
+| `slots`             | `8`     | The number of stratagem slots in the loadout, from 4 to 20. See below the table for what 4 does.                                                                                                        |
 | `collapse`          | `on`    | Collapses a loadout of many rows on the loadout screen (see [Usage](#usage)). With `off` the card always shows every row and has no bar.                                                                |
 | `collapse_rows`     | `2`     | How many rows of four a loadout needs to be collapsed, from 2 to 5.                                                                                                                                     |
 | `collapse_animate`  | `on`    | Opens and closes the collapsed rows over a moment. With `off` they show and hide at once.                                                                                                               |
@@ -80,7 +68,7 @@ With the sandbox off, the mod creates `more-stratagem-slots.ini` with the defaul
 | `page_added`        | `on`    | Puts stratagems that other mods add to your list during a mission (P.S.S. extras, for example) in the pages after your own. With `off` they stay on every page, which leaves less room for yours.       |
 | `page_rearm`        | `on`    | Shows Eagle Rearm on every page once an Eagle has spent a use, so you can rearm from any page. With `off` it only shows on the pages that hold an Eagle. Either way it rearms the Eagles on every page. |
 
-A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or, with the game closed, replace the file with a fresh copy of the template from the mod's zip, which has every setting. With the sandbox off, deleting the file is enough: the mod writes a new one the next time the game starts. The mod can't add to an existing file itself, because HellForge keeps the files in `mods` read-only while the game runs.
+A settings file made by an older version doesn't have the newer settings, and the mod uses their defaults. To change one, add its line yourself (`page_rearm = off`, for example). Or, with the game closed, replace the file with a fresh copy of the template from the mod's zip, which has every setting. With the sandbox off, deleting the file is enough, and the mod writes a new one the next time the game starts.
 
 The game's stratagem list holds 16 at most, including its own (Reinforce, Resupply, SOS Beacon and so on). When your stratagems don't fit, they are split into pages. Only the page shown can be called in, and each stratagem keeps its uses and cooldown while on another page.
 
@@ -88,19 +76,15 @@ With `slots = 4` the loadout screen stays the game's default, leaving only the p
 
 ### Upgrading from an older version
 
-Before 0.3.2 `slots = 4` switched the mod off. Now it keeps the pages for what other mods add (see above). To switch the mod off, switch it off in HellForge.
+Since 0.3.2, `slots = 4` no longer switches the mod off. To turn the mod off, switch it off on the launcher's Mods page.
 
-`per_row` from before 0.3.0 is no longer read: the rows are always of four. You can leave its line in the file or delete it. To change when the card collapses, add a `collapse_rows` line; to switch the collapsing off, add `collapse = off`; to switch only its animation off, add `collapse_animate = off`.
-
-`page_hold` from before 0.2.0 is no longer read, so you can leave its line in the file or delete it. `page_lock = on` does what it did.
-
-From 0.2.0 wheel up is the next page and wheel down the previous one, the other way around from before. `page_wheel_invert = on` gives the old direction.
+`per_row` and `page_hold` from older versions are no longer read, so you can delete their lines.
 
 ## Troubleshooting
 
 ### The settings file isn't there
 
-Settings file missing? HellForge's sandbox (on by default) doesn't let mods create files, so the mod can't make it for you. With the game closed, copy more-stratagem-slots.template.ini from the mod's zip into your HellForge mods folder and rename it to more-stratagem-slots.ini. The mod reads it the next time the game starts.
+HellForge's sandbox (on by default) stops the mod from making it, so you copy it from the template yourself. The steps are under [Settings](#settings).
 
 ### The game is stuck at "build mods"
 
