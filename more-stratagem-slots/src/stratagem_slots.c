@@ -26,6 +26,7 @@
 #include <string.h>
 #include <windows.h>
 #include "hellforge_mod.h"
+#include "more_stratagem_slots.h" /* the functions other mods call (see "exports") */
 
 /* ---- the game -------------------------------------------------------------------------------------------------- */
 
@@ -1349,8 +1350,12 @@ static void SetSlot(uint8_t* card, uint32_t slot, uint32_t stable)
     }
     Panel* p = FindPanel(card + CARD_PANEL);
     if (p == NULL || !p->built) return;
-    uint32_t type = stable_to_type(stable);
-    widget_set_type(Extra(p, slot - GAME_SLOTS), type);
+    /* The picker never sets a locked slot, nor stable id 0; another mod calling the setter (a preset) might: a locked
+     * slot stays empty, and 0 empties the slot, as the refresh does with type 0. */
+    uint8_t* w = Extra(p, slot - GAME_SLOTS);
+    if (Locked(w)) return;
+    uint32_t type = stable != 0 ? stable_to_type(stable) : 0;
+    widget_set_type(w, type);
     LOG_ONCE(LOG_PICK, "slot %u set to type %u (stable id %u)", slot + 1, type, stable);
 }
 
@@ -3038,6 +3043,66 @@ static int MissionList(const uint8_t* list)
     return 0;
 }
 
+/* ---- exports ------------------------------------------------------------------------------------------------------ */
+
+/* Functions other code mods call by name (more_stratagem_slots.h, where they are described). Their names and what they
+ * do never change: a new version only adds functions. They run on the game thread, as this mod's own work does. */
+static volatile LONG g_page_request = -1; /* mss_set_page: the page asked for, taken by Tick */
+static int g_started;                     /* hellforge_mod_init succeeded: the exports answer */
+
+/* The pages answer only as Tick works on them: during a mission, for the local player's picks (checked in the local
+ * list), while the list is still the mission's */
+static int PagesLive(void)
+{
+    if (!g_started || !g_pager.active || !g_pager.checked || !g_in_mission || g_pager.pages == 0) return 0;
+    const uint8_t* list = LocalList();
+    return list != NULL && MissionList(list);
+}
+
+HF_MOD_EXPORT uint32_t mss_version(void) { return g_started ? MSS_VERSION : 0; }
+
+HF_MOD_EXPORT uint32_t mss_slots(void) { return g_started ? g_slots : 0; }
+
+HF_MOD_EXPORT uint32_t mss_get_slots(const void* card, uint32_t* types, uint32_t capacity)
+{
+    /* with slots = 4 the loadout screen is the game's: its code is not checked, so the card is not read */
+    if (!g_started || g_extra == 0 || card == NULL || (types == NULL && capacity != 0)) return 0;
+    uint8_t* panel = (uint8_t*)card + CARD_PANEL;
+    Panel* p = FindPanel(panel);
+    if (p == NULL || !p->built) return 0;
+    for (uint32_t i = 0; i < g_slots && i < capacity; i++)
+    {
+        const uint8_t* w = i < GAME_SLOTS ? GameSlot(panel, i) : Extra(p, i - GAME_SLOTS);
+        types[i] = Locked(w) ? MSS_SLOT_LOCKED : Get32(w + WIDGET_TYPE);
+    }
+    return g_slots;
+}
+
+HF_MOD_EXPORT uint32_t mss_page(void) { return PagesLive() ? g_pager.page : 0; }
+
+HF_MOD_EXPORT uint32_t mss_page_count(void) { return PagesLive() ? g_pager.pages : 0; }
+
+HF_MOD_EXPORT uint32_t mss_picks(MssPick* picks, uint32_t capacity)
+{
+    if (!PagesLive() || (picks == NULL && capacity != 0)) return 0;
+    uint32_t items = g_pager.items < MAX_ITEMS ? g_pager.items : MAX_ITEMS;
+    for (uint32_t k = 0; k < items && k < capacity; k++)
+    {
+        picks[k].type = Get32(g_pager.state[k]);
+        picks[k].page = g_pager.per_page != 0 ? k / g_pager.per_page : 0;
+        picks[k].flags = ((g_pager.shown[k] || g_pager.held[k]) && !g_pager.gone[k] ? MSS_PICK_SHOWN : 0) |
+                         (g_pager.gone[k] ? MSS_PICK_USED_UP : 0) | (k >= g_pager.picks ? MSS_PICK_ADDED : 0);
+    }
+    return items;
+}
+
+HF_MOD_EXPORT int mss_set_page(uint32_t page)
+{
+    if (!PagesLive() || page >= g_pager.pages) return 0;
+    InterlockedExchange(&g_page_request, (LONG)page);
+    return 1;
+}
+
 static int g_hook_tried; /* InstallHooks ran (once) */
 static int g_hooked;     /* the main hooks are in: Tick does its work */
 static void InstallHooks(HfMod* mod);
@@ -3118,7 +3183,14 @@ static void Tick(HfMod* mod, float dt, void* user)
             SwitchPage(g_pager.page, "a parked stratagem", 0);
             g_refitting = g_park_refit = 0;
         }
+        /* a page another mod asked for (mss_set_page): as a page key would, held back the same way */
+        LONG asked = InterlockedExchange(&g_page_request, -1);
+        if (asked >= 0 && now != NULL && g_pager.active && g_pager.checked && (uint32_t)asked < g_pager.pages &&
+            (uint32_t)asked != g_pager.page && SwitchPage((uint32_t)asked, "another mod", 0) > 0)
+            play_sound(0, SOUND_MOVE);
     }
+    else
+        InterlockedExchange(&g_page_request, -1); /* no pages now: an old request does not wait for the next mission */
     int live = g_pager.active && (!mission || ours) && g_pager.pages >= 2 && g_list_is_open &&
                (!g_label_ok || ms - (ULONGLONG)g_list_seen < WHEEL_LIVE_MS) && GameFocused();
     InterlockedExchange64(&g_wheel_until, live ? (LONG64)(ms + WHEEL_LIVE_MS) : 0);
@@ -3149,7 +3221,7 @@ static const char kDefaultSettings[] =
     "# More Stratagem Slots settings. Changes apply the next time the game starts.\r\n"
     "\r\n"
     "# Stratagem slots in the loadout, 4 to 20. Those that don't fit in the game's stratagem list are split into pages.\r\n"
-    "# With 4 the loadout screen is the game's own, and the pages are only for what other mods add (P.S.S.).\r\n"
+    "# With 4 the loadout screen stays the game's default, leaving only the paging for what other mods add.\r\n"
     "slots = 8\r\n"
     "\r\n"
     "# Loadout screen: a loadout of collapse_rows rows of four or more (2 to 5) shows its first row, and a bar that\r\n"
@@ -3531,5 +3603,7 @@ HF_MOD_EXPORT int hellforge_mod_init(const HfApi* api, HfMod* mod)
      * pages still take in what other mods add to the list during a mission (P.S.S.), and the guards on the game's
      * limit of 16 still hold */
     if (g_extra == 0) hf->log(mod, "slots = 4: the game's loadout screen; pages only for what other mods add");
-    return api->on(mod, HF_EVENT_GAME_LOADED, GameLoaded, NULL) == 0 ? 0 : 1; /* on: 0 on success */
+    if (api->on(mod, HF_EVENT_GAME_LOADED, GameLoaded, NULL) != 0) return 1; /* on: 0 on success */
+    g_started = 1; /* the exports answer from here on */
+    return 0;
 }
