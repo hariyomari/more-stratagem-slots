@@ -90,6 +90,16 @@ HellForge's sandbox (on by default) stops the mod from making it, so you copy it
 
 The first time the game starts with a mod that is built from source, HellForge downloads its compiler. This can take a few minutes, and only happens once.
 
+## For mod authors
+
+Other HellForge code mods can read the slots past the first four with the functions in [`more_stratagem_slots.h`](more-stratagem-slots/src/more_stratagem_slots.h). Look them up in `stratagem_slots.dll` with `GetProcAddress` once the game has loaded.
+
+- `mss_slots` gives the number of slots the player set.
+- `mss_get_slots` gives a loadout card's slots, 5 and up included.
+- `mss_page`, `mss_page_count`, `mss_picks` and `mss_set_page` cover the pages during a mission.
+
+Setting a slot needs nothing from this mod. Call the game's slot setter with slot 4 and up, as you would for the first four, and the mod puts the stratagem in its extra slots.
+
 ## Building
 
 HellForge builds the mod from its source when the game starts, so you don't need to build anything to play. To make the release zip yourself, run `scripts\package.bat` (or `scripts/package.sh`) with your HellForge folder:
