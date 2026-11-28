@@ -444,6 +444,7 @@ typedef struct
     int strip_look;   /* StripDraw: the colours it has (0 plain, 1 hovered, 2 focused), or -1 */
     float fold_pos;   /* how far the rows under the game's four are open, 0 to 1 (before easing): it follows the fold */
     LONGLONG fold_tick; /* ... and its last step, by QueryPerformanceCounter; 0 while it is not moving */
+    uint32_t remote_seen; /* RemoteCards: the last message count its extra slots were filled at */
 } Panel;
 
 static const HfApi* hf;
@@ -532,9 +533,9 @@ static uint8_t g_saved[MAX_EXTRA * LOADOUT_SLOT]; /* Commit: the record's extra 
 
 /* Log lines per kind, so a session's log shows the first few of each without filling up. */
 enum { LOG_BUILD, LOG_REFRESH, LOG_COMMIT, LOG_PICK, LOG_GUARD, LOG_PAGE, LOG_LABEL, LOG_COPY, LOG_EAGLE, LOG_ROWS,
-       LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_FOLD, LOG_KINDS };
+       LOG_WHEEL, LOG_PARK, LOG_HAND, LOG_HUD, LOG_REARM, LOG_FOLD, LOG_REMOTE, LOG_KINDS };
 static uint32_t g_logged[LOG_KINDS];
-static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120, 40 };
+static const uint32_t kLogLimit[LOG_KINDS] = { 16, 16, 40, 60, 40, 500, 24, 6, 40, 600, 12, 120, 600, 200, 120, 40, 60 };
 #define LOG_ONCE(kind, ...) do { if (g_logged[kind] < kLogLimit[kind]) { g_logged[kind]++; hf->log(self, __VA_ARGS__); } } while (0)
 
 static uint32_t Get32(const uint8_t* at) { uint32_t v; memcpy(&v, at, 4); return v; }
@@ -593,6 +594,7 @@ static Panel* AddPanel(uint8_t* panel)
     p->strip_look = -1;
     p->fold_pos = 1.0f;
     p->fold_tick = 0;
+    p->remote_seen = 0xFFFFFFFFu;
     return p;
 }
 
@@ -891,17 +893,138 @@ static uint32_t ExtraEntries(const uint8_t* loadout, uint32_t* index, uint32_t* 
     return found;
 }
 
+/* ---- other players' cards ---------------------------------------------------------------------------------------- */
+
+/* The game sends a player's loadout to the others with its first 4 stratagems only, so another player's card would
+ * show its extra slots empty. Each machine sends its own picks 5 and up to the others through HellForge's mod channel
+ * (SDK 16: send, HF_ON_MESSAGE), when they change and every REMOTE_RESEND_MS while another player's card is shown (a
+ * late joiner gets them too); a card whose record holds no extra entries shows the ones its player sent. Display only:
+ * the records stay as the game wrote them. */
+#define RECORD_PEER 0x9E8u           /* u64: the player a loadout screen record is (screen + slot * 0x9F0 + 0x10) */
+#define REMOTE_MAGIC 0x3153534Du     /* "MSS1": a message of picks 5 and up */
+#define REMOTE_MAX 8u                /* players remembered */
+#define REMOTE_RESEND_MS 2000u
+#define REMOTE_SEEN_MS 3000u         /* another player's card was shown this recently: keep sending */
+typedef struct { uint32_t magic, count, types[MAX_EXTRA]; } RemoteMessage;
+typedef struct { uint64_t peer; uint32_t count, types[MAX_EXTRA]; } Remote;
+static Remote g_remote[REMOTE_MAX];
+static uint32_t g_remote_count, g_remote_next;
+static uint32_t g_remote_serial; /* counts the messages taken in: a card refills when it has not seen the latest */
+static int g_can_send;           /* this HellForge has the mod channel */
+
+static uint64_t RecordPeer(const uint8_t* loadout) { return loadout != NULL ? Get64(loadout + RECORD_PEER) : 0; }
+
+static const Remote* FindRemote(uint64_t peer)
+{
+    if (peer == 0) return NULL;
+    for (uint32_t i = 0; i < g_remote_count; i++)
+        if (g_remote[i].peer == peer) return &g_remote[i];
+    return NULL;
+}
+
+static void OnMessage(HfMod* mod, const HfEventInfo* event, void* user)
+{
+    (void)mod; (void)user;
+    if (event->kind != HF_ON_MESSAGE || event->size < sizeof(HfMessageEvent)) return;
+    const HfMessageEvent* m = (const HfMessageEvent*)event;
+    RemoteMessage in;
+    if (m->bytes < 8 || m->bytes > sizeof in) return;
+    memset(&in, 0, sizeof in);
+    memcpy(&in, m->data, m->bytes);
+    if (in.magic != REMOTE_MAGIC || in.count > MAX_EXTRA || m->bytes != 8 + in.count * 4)
+    {
+        LOG_ONCE(LOG_REMOTE, "a message from player %llx that is not this mod's picks (%u bytes): left out",
+                 (unsigned long long)m->from, m->bytes);
+        return;
+    }
+    Remote* r = (Remote*)FindRemote(m->from);
+    if (r == NULL)
+    {
+        if (g_remote_count < REMOTE_MAX) r = &g_remote[g_remote_count++];
+        else r = &g_remote[g_remote_next], g_remote_next = (g_remote_next + 1) % REMOTE_MAX;
+        r->peer = m->from;
+        r->count = 0xFFFFFFFFu;
+    }
+    if (r->count == in.count && memcmp(r->types, in.types, in.count * 4) == 0) return; /* a resend */
+    char list[MAX_EXTRA * 12] = "";
+    for (uint32_t k = 0; k < in.count; k++)
+    {
+        char one[12];
+        wsprintfA(one, " %u", in.types[k]);
+        lstrcatA(list, one);
+    }
+    LOG_ONCE(LOG_REMOTE, "player %llx sent picks 5 and up: %u of them,%s", (unsigned long long)m->from, in.count,
+             in.count ? list : " none");
+    r->count = in.count;
+    memset(r->types, 0, sizeof r->types);
+    memcpy(r->types, in.types, in.count * 4);
+    g_remote_serial++;
+}
+
 static void FillExtras(Panel* p, const uint8_t* loadout)
 {
     uint32_t index[MAX_EXTRA], count = 0, found = 0;
     if (loadout != NULL) found = ExtraEntries(loadout, index, &count);
+    /* Another player's card: what that player sent, whatever the record holds. The game syncs their record with their
+     * first 4 only, or, to a player who joins later, with the first 16 (so 12 extra: the rest would stay empty). */
+    const Remote* r = FindRemote(RecordPeer(loadout));
+    if (r != NULL) found = 0;
     for (uint32_t k = 0; k < g_extra; k++)
     {
-        uint32_t type = k < found ? Get32(loadout + LOADOUT_SLOTS + index[k] * LOADOUT_SLOT) : 0;
+        uint32_t type = k < found ? Get32(loadout + LOADOUT_SLOTS + index[k] * LOADOUT_SLOT) :
+                        r != NULL && k < r->count ? r->types[k] : 0;
         if (Get32(Extra(p, k) + WIDGET_TYPE) != type) widget_set_type(Extra(p, k), type);
     }
+    p->remote_seen = g_remote_serial;
     if (found != 0) LOG_ONCE(LOG_REFRESH, "refresh panel %p: record %p holds %u, %u in the extra slots", (void*)p->panel,
              (const void*)loadout, count, found);
+    else if (r != NULL)
+        LOG_ONCE(LOG_REMOTE, "panel %p shows player %llx: the record holds %u, the extra slots take the %u that player sent",
+                 (void*)p->panel, (unsigned long long)r->peer, count, r->count < g_extra ? r->count : g_extra);
+}
+
+static uint64_t LocalPeer(void);
+
+/* Every frame, from each card's hover test (the cards exist then): sends the local card's picks 5 and up when they
+ * changed or are due again, and refills another player's card when a message came in since it last filled. */
+static void RemoteCards(Panel* p)
+{
+    const uint8_t* loadout = (const uint8_t*)(uintptr_t)Get64(p->panel + PANEL_SHOWN);
+    uint64_t peer = RecordPeer(loadout), local = LocalPeer();
+    if (peer == 0 || local == 0) return;
+    ULONGLONG ms = GetTickCount64();
+    static ULONGLONG others_seen, last_sent;
+    static RemoteMessage sent = {0, 0xFFFFFFFFu, {0}};
+    if (peer != local)
+    {
+        others_seen = ms;
+        static uint64_t logged[REMOTE_MAX];
+        int known = 0;
+        for (uint32_t i = 0; i < REMOTE_MAX && !known; i++) known = logged[i] == peer;
+        for (uint32_t i = 0; i < REMOTE_MAX && !known; i++)
+            if (logged[i] == 0)
+            {
+                logged[i] = peer, known = 1;
+                LOG_ONCE(LOG_REMOTE, "panel %p is player %llx's card: its record %p holds %u", (void*)p->panel,
+                         (unsigned long long)peer, (const void*)loadout, Get32(loadout + LOADOUT_COUNT));
+            }
+        if (p->remote_seen != g_remote_serial) FillExtras(p, loadout);
+        return;
+    }
+    if (!g_can_send || ms - others_seen > REMOTE_SEEN_MS) return;
+    RemoteMessage out = {REMOTE_MAGIC, 0, {0}};
+    for (uint32_t k = 0; k < g_extra; k++)
+    {
+        const uint8_t* w = Extra(p, k);
+        out.types[k] = Locked(w) ? 0 : Get32(w + WIDGET_TYPE);
+        if (out.types[k] != 0) out.count = k + 1;
+    }
+    int changed = out.count != sent.count || memcmp(out.types, sent.types, out.count * 4) != 0;
+    if (!changed && ms - last_sent < REMOTE_RESEND_MS) return;
+    last_sent = ms;
+    if (hf->send(self, HF_TO_ALL, &out, 8 + out.count * 4) != 0) return; /* refused: the log says why; tried again */
+    if (changed) LOG_ONCE(LOG_REMOTE, "sent this card's picks 5 and up to the other players: %u of them", out.count);
+    sent = out;
 }
 
 /* ---- focus ------------------------------------------------------------------------------------------------------- */
@@ -1025,6 +1148,7 @@ static uint32_t BuildPanel(uint8_t* panel)
     uint32_t result = g_build_panel(panel);
     Panel* p = FindPanel(panel);
     if (p != NULL) p->built = p->failed = p->strip_ok = 0; /* the build reset the panel's children: link the extras again */
+    if (p != NULL) p->remote_seen = 0xFFFFFFFFu;           /* and another player's card fills again */
     g_folded = 1; /* a new loadout screen (its cards are all built together) starts folded */
     ReadyPanel(panel, "panel build");
     return result;
@@ -1156,6 +1280,7 @@ static uint64_t Hover(uint8_t* panel, uint64_t unused, uint8_t cursor_off)
     uint64_t result = g_hover(panel, unused, cursor_off);
     Panel* p = FindPanel(panel);
     if (p == NULL || !p->built) return result;
+    RemoteCards(p);
     int mouse_path = !(InputModes()[MODE_VIRTUAL_CURSOR] || cursor_off);
     uint8_t* cursor = *(uint8_t**)(game + RVA_G_CURSOR) + CURSOR;
     p->hover = -1;
@@ -3604,6 +3729,12 @@ HF_MOD_EXPORT int hellforge_mod_init(const HfApi* api, HfMod* mod)
      * limit of 16 still hold */
     if (g_extra == 0) hf->log(mod, "slots = 4: the game's loadout screen; pages only for what other mods add");
     if (api->on(mod, HF_EVENT_GAME_LOADED, GameLoaded, NULL) != 0) return 1; /* on: 0 on success */
+    /* other players' cards (RemoteCards): the mod channel is SDK 16 */
+    if (g_extra != 0 && api->size >= offsetof(HfApi, send) + sizeof(void*))
+    {
+        g_can_send = api->subscribe(mod, HF_ON_MESSAGE, OnMessage, NULL, 0) == 1;
+        if (!g_can_send) hf->log(mod, "no messages from the other players: their cards show only their first 4");
+    }
     g_started = 1; /* the exports answer from here on */
     return 0;
 }
