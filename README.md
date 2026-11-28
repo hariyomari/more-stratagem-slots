@@ -4,7 +4,7 @@
 
 A mod for [HellForge](https://github.com/SkyeShade/HellForge) allowing you to bring up to a maximum of 20 stratagems. It reuses the existing stratagem widget on the loadout screen for seamless selection.
 
-**Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and 0.5.0-beta, for game build 25480438. It has only been tested solo, so co-op is untested. If you try it, every player needs the mod.**
+**Requires HellForge 0.4.0-beta or later. Built and tested on HellForge 0.4.0-beta and 0.5.0-beta, for game build 25480438. Tested solo and in co-op.**
 
 ## Preview
 
