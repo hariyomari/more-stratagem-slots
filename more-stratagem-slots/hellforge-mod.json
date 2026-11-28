@@ -2,7 +2,7 @@
   "format": 1,
   "id": "hariyomari.more-stratagem-slots",
   "name": "More Stratagem Slots",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Allows up to 20 stratagem slots up from the default 4 to be selected in the loadout screen. Q/E or MWHEEL UP/DOWN to switch pages.",
   "url": "https://github.com/hariyomari/more-stratagem-slots",
   "gameplay": true,
