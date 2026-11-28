@@ -3221,7 +3221,7 @@ static const char kDefaultSettings[] =
     "# More Stratagem Slots settings. Changes apply the next time the game starts.\r\n"
     "\r\n"
     "# Stratagem slots in the loadout, 4 to 20. Those that don't fit in the game's stratagem list are split into pages.\r\n"
-    "# With 4 the loadout screen is the game's own, and the pages are only for what other mods add (P.S.S.).\r\n"
+    "# With 4 the loadout screen stays the game's default, leaving only the paging for what other mods add.\r\n"
     "slots = 8\r\n"
     "\r\n"
     "# Loadout screen: a loadout of collapse_rows rows of four or more (2 to 5) shows its first row, and a bar that\r\n"
